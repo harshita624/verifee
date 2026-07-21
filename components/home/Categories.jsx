@@ -17,23 +17,26 @@ export default function Categories() {
         </div>
 
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
-          {CATEGORIES.map((cat) => (
-            <Link
-              key={cat.id}
-              href={`/check-price?category=${cat.id}`}
-              className="group flex flex-col items-center gap-3 bg-white rounded-2xl p-5 border border-zinc-100 hover:border-zinc-200 card-hover text-center cursor-pointer"
-            >
-              <div
-                className="w-14 h-14 rounded-2xl flex items-center justify-center text-2xl transition-transform group-hover:scale-110"
-                style={{ background: `${cat.color}12` }}
+          {CATEGORIES.map((cat) => {
+            const Icon = cat.icon;
+            return (
+              <Link
+                key={cat.id}
+                href={`/check-price?category=${cat.id}`}
+                className="group flex flex-col items-center gap-3 bg-white rounded-2xl p-5 border border-zinc-100 hover:border-zinc-200 card-hover text-center cursor-pointer"
               >
-                {cat.icon}
-              </div>
-              <span className="text-[13px] font-semibold text-zinc-700 group-hover:text-zinc-900 transition-colors leading-tight">
-                {cat.label}
-              </span>
-            </Link>
-          ))}
+                <div
+                  className="w-14 h-14 rounded-2xl flex items-center justify-center transition-transform group-hover:scale-110"
+                  style={{ background: `${cat.color}12` }}
+                >
+                  <Icon className="w-6 h-6" style={{ color: cat.color }} />
+                </div>
+                <span className="text-[13px] font-semibold text-zinc-700 group-hover:text-zinc-900 transition-colors leading-tight">
+                  {cat.label}
+                </span>
+              </Link>
+            );
+          })}
         </div>
       </div>
     </section>

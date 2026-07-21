@@ -96,7 +96,7 @@ export default function ContributePage() {
   const handleSubmit = async () => {
     setLoading(true);
     try {
-      const token = localStorage.getItem("vf_token");
+      const token = typeof window !== "undefined" ? localStorage.getItem("vf_token") : null;
       const res = await fetch("/api/v1/prices", {
         method: "POST",
         headers: {
@@ -240,7 +240,7 @@ export default function ContributePage() {
                   <option value="">Select category</option>
                   {CATEGORIES.map((cat) => (
                     <option key={cat.id} value={cat.id}>
-                      {cat.icon} {cat.label}
+                      {cat.label}
                     </option>
                   ))}
                 </select>
