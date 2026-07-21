@@ -1,0 +1,236 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap");
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --green:        #16a34a;
+  --green-mid:    #22c55e;
+  --green-light:  #86efac;
+  --green-bg:     #f0fdf4;
+  --green-border: #dcfce7;
+  --text:         #09090b;
+  --text-2:       #3f3f46;
+  --text-3:       #71717a;
+  --text-4:       #a1a1aa;
+  --border:       #e4e4e7;
+  --border-2:     #f4f4f5;
+  --bg:           #ffffff;
+  --bg-2:         #fafafa;
+  --bg-3:         #f4f4f5;
+  --shadow-sm:    0 1px 3px rgba(0,0,0,0.06),0 1px 2px rgba(0,0,0,0.04);
+  --shadow:       0 4px 16px rgba(0,0,0,0.06),0 1px 4px rgba(0,0,0,0.04);
+  --shadow-lg:    0 12px 40px rgba(0,0,0,0.08),0 4px 12px rgba(0,0,0,0.04);
+  --shadow-xl:    0 24px 64px rgba(0,0,0,0.10),0 8px 24px rgba(0,0,0,0.06);
+  --radius-sm:    8px;
+  --radius:       12px;
+  --radius-lg:    16px;
+  --radius-xl:    20px;
+}
+
+*{box-sizing:border-box;margin:0;padding:0}
+
+html{
+  scroll-behavior:smooth;
+  -webkit-font-smoothing:antialiased;
+  -moz-osx-font-smoothing:grayscale;
+  text-rendering:optimizeLegibility;
+}
+
+body{
+  font-family:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  background:#fff;
+  color:#09090b;
+  line-height:1.6;
+  overflow-x:hidden;
+}
+
+::selection{background:#bbf7d0;color:#14532d}
+
+::-webkit-scrollbar{width:4px;height:4px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:#d4d4d8;border-radius:4px}
+::-webkit-scrollbar-thumb:hover{background:#a1a1aa}
+
+/* ── Focus ── */
+*:focus-visible{outline:2px solid #16a34a;outline-offset:2px}
+input,textarea,select{font-family:inherit}
+input:focus,textarea:focus,select:focus{
+  outline:none !important;
+  border-color:#16a34a !important;
+  box-shadow:0 0 0 3px rgba(22,163,74,0.10) !important;
+}
+
+/* ── Container ── */
+.container{
+  width:100%;
+  max-width:1200px;
+  margin:0 auto;
+  padding:0 16px;
+}
+@media(min-width:480px){.container{padding:0 20px}}
+@media(min-width:640px){.container{padding:0 24px}}
+@media(min-width:1024px){.container{padding:0 32px}}
+@media(min-width:1280px){.container{padding:0 40px}}
+
+/* ── Animations ── */
+@keyframes fadeUp{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes shimmer{0%{background-position:-600px 0}100%{background-position:600px 0}}
+@keyframes typing-dot{0%,60%,100%{transform:translateY(0);opacity:.4}30%{transform:translateY(-4px);opacity:1}}
+@keyframes badge-pulse{0%,100%{box-shadow:0 0 0 0 rgba(22,163,74,.2)}50%{box-shadow:0 0 0 6px rgba(22,163,74,0)}}
+@keyframes pulse-dot{0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(34,197,94,.4)}50%{opacity:.8;box-shadow:0 0 0 5px rgba(34,197,94,0)}}
+@keyframes count-up{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes slide-in{from{opacity:0;transform:translateX(-12px)}to{opacity:1;transform:translateX(0)}}
+
+.animate-fade-up{animation:fadeUp .4s ease forwards}
+.animate-fade-in{animation:fadeIn .3s ease forwards}
+.animate-float{animation:float 6s ease-in-out infinite}
+.badge-pulse{animation:badge-pulse 2.5s ease-in-out infinite}
+
+/* ── Utilities ── */
+.no-scrollbar{scrollbar-width:none;-ms-overflow-style:none}
+.no-scrollbar::-webkit-scrollbar{display:none}
+
+.shimmer{
+  background:linear-gradient(90deg,#f4f4f5 25%,#e4e4e7 50%,#f4f4f5 75%);
+  background-size:600px 100%;
+  animation:shimmer 1.5s infinite linear;
+  border-radius:var(--radius);
+}
+
+.live-dot{
+  width:7px;height:7px;
+  background:#22c55e;border-radius:50%;
+  display:inline-block;
+  animation:pulse-dot 2s ease-in-out infinite;
+}
+
+.card-hover{
+  transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease;
+}
+.card-hover:hover{
+  transform:translateY(-2px);
+  box-shadow:var(--shadow-lg);
+  border-color:#d4d4d8 !important;
+}
+
+.glass{
+  background:rgba(255,255,255,.88);
+  backdrop-filter:blur(16px);
+  -webkit-backdrop-filter:blur(16px);
+  border:1px solid rgba(255,255,255,.9);
+}
+
+.section-label{
+  font-size:12px;font-weight:600;
+  letter-spacing:.1em;text-transform:uppercase;color:#16a34a;
+}
+
+.text-gradient{
+  background:linear-gradient(135deg,#15803d,#22c55e);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;
+}
+
+.hero-bg{
+  background:
+    radial-gradient(ellipse 80% 50% at 50% -10%,rgba(22,163,74,.07) 0%,transparent 60%),
+    linear-gradient(180deg,#f0fdf4 0%,#ffffff 60%);
+}
+
+.typing-dot{
+  width:5px;height:5px;background:#a1a1aa;
+  border-radius:50%;display:inline-block;
+}
+.typing-dot:nth-child(1){animation:typing-dot 1.2s 0s ease-in-out infinite}
+.typing-dot:nth-child(2){animation:typing-dot 1.2s .15s ease-in-out infinite}
+.typing-dot:nth-child(3){animation:typing-dot 1.2s .3s ease-in-out infinite}
+
+/* ── Green gradient button ── */
+.btn-green{
+  background:linear-gradient(135deg,#16a34a,#15803d);
+  color:#fff;font-weight:600;
+  transition:opacity .15s ease,transform .15s ease;
+}
+.btn-green:hover{opacity:.92}
+.btn-green:active{transform:scale(.97)}
+
+/* ── Global page spacing — prevents content hiding under fixed navbar ── */
+main > * + * {
+  /* handled per-page */
+}
+
+/* Every direct section child gets breathing room above footer */
+.page-content {
+  min-height: calc(100vh - 60px - 280px);
+}
+
+/* Responsive typography scale */
+@media (max-width: 480px) {
+  .text-responsive-xl  { font-size: clamp(28px, 8vw, 44px) !important; }
+  .text-responsive-lg  { font-size: clamp(22px, 6vw, 32px) !important; }
+  .text-responsive-md  { font-size: clamp(16px, 4vw, 22px) !important; }
+}
+
+/* ── Fix: ensure footer never glues to content ── */
+footer { margin-top: 0 !important; }
+main   { padding-bottom: 0; }
+
+/* Every page wrapper */
+.vf-page {
+  min-height: 100vh;
+  padding-top: 60px;
+  background: #fafafa;
+}
+
+/* Section spacing */
+.vf-section { padding-top: 80px; padding-bottom: 80px; }
+@media(max-width:640px) { .vf-section { padding-top: 56px; padding-bottom: 56px; } }
+
+/* ── Unique gradient accents ── */
+.accent-green-glow {
+  box-shadow: 0 0 40px rgba(22,163,74,.12), 0 8px 24px rgba(22,163,74,.08);
+}
+
+.card-shine {
+  position: relative;
+  overflow: hidden;
+}
+.card-shine::before {
+  content: "";
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background: linear-gradient(
+    45deg,
+    transparent 30%,
+    rgba(255,255,255,.05) 50%,
+    transparent 70%
+  );
+  transform: translateX(-100%);
+  transition: transform 0.6s ease;
+}
+.card-shine:hover::before { transform: translateX(100%); }
+
+/* ── Stat counter animation ── */
+@keyframes count { from { opacity: 0; transform: scale(0.8); } to { opacity: 1; transform: scale(1); } }
+.stat-count { animation: count 0.4s ease forwards; }
+
+/* ── Smooth underline link ── */
+.link-underline {
+  position: relative;
+  text-decoration: none;
+}
+.link-underline::after {
+  content: "";
+  position: absolute;
+  bottom: -1px; left: 0;
+  width: 0; height: 1.5px;
+  background: currentColor;
+  transition: width 0.25s ease;
+}
+.link-underline:hover::after { width: 100%; }
