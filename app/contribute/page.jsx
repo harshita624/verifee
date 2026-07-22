@@ -335,7 +335,11 @@ export default function ContributePage() {
                       <option value="">Select a category</option>
                       {CATEGORIES.map((cat) => (
                         <option key={cat.id} value={cat.id}>
-                          {cat.icon} {cat.label}
+                          {/* FIX: same root cause as /check-price — cat.icon must be a
+                              plain string to render inside <option>. If CATEGORIES
+                              stores icon as a component (e.g. a lucide-react import),
+                              this line threw React error #31 at prerender time. */}
+                          {typeof cat.icon === "string" ? `${cat.icon} ` : ""}{cat.label}
                         </option>
                       ))}
                       <option value="other">Other (specify)</option>
