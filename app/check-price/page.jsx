@@ -326,7 +326,12 @@ function CheckPriceContent() {
                 <option value="">All categories</option>
                 {CATEGORIES.map((cat) => (
                   <option key={cat.id} value={cat.id}>
-                    {cat.icon} {cat.label}
+                    {/* FIX: only splice in cat.icon when it's a plain string (emoji).
+                        If it's ever a component reference (e.g. a lucide-react icon),
+                        rendering it directly here is what threw React error #31 —
+                        native <option> tags can't render components anyway, so we
+                        just fall back to the label alone in that case. */}
+                    {typeof cat.icon === "string" ? `${cat.icon} ` : ""}{cat.label}
                   </option>
                 ))}
                 <option value="other">Other (specify below)</option>
