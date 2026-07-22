@@ -67,4 +67,29 @@ router.post("/change-password", protect, async (req, res, next) => {
     next(err);
   }
 });
+
+// GET /api/v1/auth/top-contributors — real leaderboard from DB
+router.get("/top-contributors", async (req, res, next) => {
+  try {
+    const limit = Math.min(Number(req.query.limit) || 5, 20);
+
+    // Get users with most XP this month
+    const startOfMonth = new Date();
+    startOfMonth.setDate(1);
+    startOfMonth.setHours(0, 0, 0, 0);
+
+    const leaders = await User.find({
+      contributionCount: { $gt: 0 },
+      isActive: true,
+    })
+      .select("name city xp contributionCount level")
+      .sort({ xp: -1 })
+      .limit(limit)
+      .lean();
+
+    res.json({ success: true, data: leaders });
+  } catch (err) {
+    next(err);
+  }
+});
 module.exports = router;

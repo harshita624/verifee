@@ -1,557 +1,628 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import Link from "next/link";
 import {
-  Upload, MapPin, ShoppingBag, Star, CheckCircle,
-  Camera, Trophy, Zap, ArrowRight, Loader2, X,
+  Upload, CheckCircle, Loader2, AlertTriangle,
+  MapPin, Star, Trophy, Zap, ChevronRight,
+  Camera, FileText, ArrowRight, Plus,
 } from "lucide-react";
-import Button from "@/components/ui/Button";
-import Badge from "@/components/ui/Badge";
+import { useAuth } from "@/hooks/useAuth";
+import { useLocation } from "@/hooks/useLocation";
 import { CATEGORIES } from "@/lib/utils";
 
+const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
+
 const STEPS = [
-  { id: 1, label: "Product", icon: ShoppingBag },
-  { id: 2, label: "Price & Shop", icon: MapPin },
-  { id: 3, label: "Receipt", icon: Upload },
-  { id: 4, label: "Done", icon: CheckCircle },
+  { id: 1, label: "Product",  desc: "What did you buy?"     },
+  { id: 2, label: "Price",    desc: "What did you pay?"     },
+  { id: 3, label: "Location", desc: "Where did you buy it?" },
+  { id: 4, label: "Submit",   desc: "Review and confirm"    },
 ];
 
-const STAR_LABELS = ["Terrible", "Poor", "Average", "Good", "Excellent"];
+function StepIndicator({ current }) {
+  return (
+    <div className="flex items-center gap-0 mb-8">
+      {STEPS.map((step, i) => (
+        <div key={step.id} className="flex items-center flex-1 last:flex-none">
+          <div className="flex flex-col items-center">
+            <div
+              className="w-8 h-8 rounded-full flex items-center justify-center text-[12px] font-bold transition-all"
+              style={{
+                background: current > step.id ? "#16a34a"
+                  : current === step.id ? "#16a34a"
+                  : "#f4f4f5",
+                color: current >= step.id ? "#fff" : "#a1a1aa",
+              }}
+            >
+              {current > step.id
+                ? <CheckCircle className="w-4 h-4" />
+                : step.id}
+            </div>
+            <p
+              className="text-[10px] font-medium mt-1 hidden sm:block"
+              style={{ color: current >= step.id ? "#16a34a" : "#a1a1aa" }}
+            >
+              {step.label}
+            </p>
+          </div>
+          {i < STEPS.length - 1 && (
+            <div
+              className="flex-1 h-0.5 mx-2"
+              style={{ background: current > step.id ? "#16a34a" : "#e4e4e7" }}
+            />
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Real leaderboard fetched from API
+function Leaderboard() {
+  const [leaders,  setLeaders]  = useState([]);
+  const [loading,  setLoading]  = useState(true);
+  const { user } = useAuth();
+
+  useEffect(() => {
+    fetch(`${API}/api/v1/auth/top-contributors?limit=5`)
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.success) setLeaders(d.data || []);
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  const medals = ["🥇", "🥈", "🥉"];
+
+  if (loading) {
+    return (
+      <div className="space-y-3">
+        {[1, 2, 3].map((i) => (
+          <div key={i} className="shimmer h-12 rounded-xl" />
+        ))}
+      </div>
+    );
+  }
+
+  if (!leaders.length) {
+    return (
+      <div className="text-center py-6">
+        <Trophy className="w-10 h-10 text-zinc-200 mx-auto mb-2" />
+        <p className="text-[13px] font-semibold text-zinc-600 mb-1">No contributors yet</p>
+        <p className="text-[12px] text-zinc-400">
+          Be the first to contribute a price and claim the top spot!
+        </p>
+        {!user && (
+          <Link href="/auth/signup">
+            <button className="mt-3 text-[12px] font-semibold text-green-600 border border-green-200 bg-green-50 hover:bg-green-100 px-4 py-2 rounded-xl transition-colors">
+              Sign up to contribute
+            </button>
+          </Link>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      {leaders.map((person, i) => {
+        const isCurrentUser = user && person._id === user._id;
+        return (
+          <div
+            key={person._id || i}
+            className="flex items-center gap-3 px-3 py-2.5 rounded-xl transition-colors"
+            style={{
+              background: isCurrentUser ? "#f0fdf4" : i === 0 ? "#fffbeb" : "transparent",
+              border:     isCurrentUser ? "1px solid #dcfce7" : "1px solid transparent",
+            }}
+          >
+            <span className="text-[16px] shrink-0 w-6 text-center">
+              {i < 3 ? medals[i] : `${i + 1}.`}
+            </span>
+            <div className="flex-1 min-w-0">
+              <p className="text-[13px] font-bold text-zinc-900 truncate">
+                {person.name || "Anonymous"}
+                {isCurrentUser && (
+                  <span className="ml-1.5 text-[10px] font-semibold text-green-600 bg-green-100 px-1.5 py-0.5 rounded-full">
+                    You
+                  </span>
+                )}
+              </p>
+              <p className="text-[11px] text-zinc-400 truncate">
+                {person.city || "India"} · {person.contributionCount || 0} contributions
+              </p>
+            </div>
+            <span className="text-[13px] font-black text-green-600 shrink-0">
+              +{(person.xp || 0).toLocaleString()} XP
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 export default function ContributePage() {
-  const [step, setStep] = useState(1);
+  const { user } = useAuth();
+  const { city }  = useLocation();
+
+  const [step,   setStep]   = useState(1);
+  const [saving, setSaving] = useState(false);
+  const [done,   setDone]   = useState(false);
+  const [error,  setError]  = useState("");
+
   const [form, setForm] = useState({
-    product: "",
-    category: "",
-    pricePaid: "",
-    shopName: "",
-    city: "",
-    state: "",
+    product:    "",
+    category:   "",
+    customCat:  "",
+    pricePaid:  "",
+    quality:    "good",
+    city:       "",
     marketName: "",
-    rating: 0,
-    review: "",
-    receiptFile: null,
+    shopName:   "",
+    notes:      "",
   });
-  const [ocrLoading, setOcrLoading] = useState(false);
-  const [ocrResult, setOcrResult] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [success, setSuccess] = useState(false);
-  const [errors, setErrors] = useState({});
 
-  const update = (key, val) => {
-    setForm((prev) => ({ ...prev, [key]: val }));
-    setErrors((prev) => ({ ...prev, [key]: "" }));
+  // Pre-fill city from location
+  useEffect(() => {
+    if (city && !form.city) setForm((prev) => ({ ...prev, city }));
+  }, [city]);
+
+  const updateForm = (key, val) => setForm((prev) => ({ ...prev, [key]: val }));
+
+  const canProceed = () => {
+    if (step === 1) return form.product.trim().length > 1;
+    if (step === 2) return Number(form.pricePaid) > 0;
+    if (step === 3) return form.city.trim().length > 1;
+    return true;
   };
 
-  const handleFileUpload = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    update("receiptFile", file);
-
-    // Auto-parse receipt with OCR
-    const reader = new FileReader();
-    reader.onloadend = async () => {
-      setOcrLoading(true);
-      try {
-        const base64 = reader.result.split(",")[1];
-        const res = await fetch("/api/v1/ai/parse-receipt", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ imageBase64: base64 }),
-        });
-        const data = await res.json();
-        if (data.success && data.data) {
-          setOcrResult(data.data);
-          if (data.data.product) update("product", data.data.product);
-          if (data.data.amount) update("pricePaid", String(data.data.amount));
-          if (data.data.shopName) update("shopName", data.data.shopName);
-          if (data.data.city) update("city", data.data.city);
-          if (data.data.category) update("category", data.data.category);
-        }
-      } catch { /* silent */ }
-      finally { setOcrLoading(false); }
-    };
-    reader.readAsDataURL(file);
-  };
-
-  const validate = () => {
-    const errs = {};
-    if (step === 1) {
-      if (!form.product.trim()) errs.product = "Product name is required";
-      if (!form.category) errs.category = "Category is required";
-    }
-    if (step === 2) {
-      if (!form.pricePaid || Number(form.pricePaid) <= 0) errs.pricePaid = "Valid price is required";
-      if (!form.city.trim()) errs.city = "City is required";
-    }
-    setErrors(errs);
-    return Object.keys(errs).length === 0;
-  };
-
-  const handleNext = () => {
-    if (!validate()) return;
-    setStep((s) => Math.min(s + 1, 4));
-  };
-
-  const handleSubmit = async () => {
-    setLoading(true);
+  const submit = async () => {
+    setSaving(true);
+    setError("");
     try {
-      const token = typeof window !== "undefined" ? localStorage.getItem("vf_token") : null;
-      const res = await fetch("/api/v1/prices", {
-        method: "POST",
+      const token = localStorage.getItem("vf_token");
+      const res   = await fetch(`${API}/api/v1/prices`, {
+        method:  "POST",
         headers: {
           "Content-Type": "application/json",
           ...(token && { Authorization: `Bearer ${token}` }),
         },
         body: JSON.stringify({
-          product: form.product,
-          category: form.category,
-          pricePaid: Number(form.pricePaid),
-          shopName: form.shopName,
-          city: form.city,
-          state: form.state,
-          marketName: form.marketName,
+          product:    form.product.trim(),
+          category:   form.category === "other" ? form.customCat : form.category,
+          pricePaid:  Number(form.pricePaid),
+          quality:    form.quality,
+          city:       form.city.trim(),
+          marketName: form.marketName.trim(),
+          shopName:   form.shopName.trim(),
+          notes:      form.notes.trim(),
         }),
       });
-
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.message);
-      }
-
-      setSuccess(true);
-      setStep(4);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Submission failed");
+      setDone(true);
     } catch (err) {
-      setErrors({ submit: err.message || "Submission failed. Please try again." });
+      setError(err.message || "Something went wrong. Please try again.");
     } finally {
-      setLoading(false);
+      setSaving(false);
     }
   };
 
+  // ── Success state ──────────────────────────────────────────────────────────
+  if (done) {
+    return (
+      <div className="vf-page">
+        <div className="container max-w-lg py-20 text-center">
+          <div
+            className="w-20 h-20 rounded-3xl flex items-center justify-center mx-auto mb-6"
+            style={{ background: "linear-gradient(135deg,#16a34a,#22c55e)" }}
+          >
+            <CheckCircle className="w-10 h-10 text-white" />
+          </div>
+          <h2 className="text-[28px] font-black text-zinc-950 mb-2">
+            Contribution submitted!
+          </h2>
+          <p className="text-[15px] text-zinc-500 mb-2 leading-relaxed">
+            You earned <span className="font-bold text-green-600">+50 XP</span> for helping
+            future travelers know the fair price.
+          </p>
+          <p className="text-[13px] text-zinc-400 mb-8">
+            Your report will be reviewed and verified by the community.
+          </p>
+          <div className="flex flex-col sm:flex-row gap-3 justify-center">
+            <button
+              onClick={() => { setDone(false); setStep(1); setForm({ product:"",category:"",customCat:"",pricePaid:"",quality:"good",city:"",marketName:"",shopName:"",notes:"" }); }}
+              className="flex items-center justify-center gap-2 btn-green text-[14px] px-6 py-3 rounded-xl"
+            >
+              <Plus className="w-4 h-4" /> Contribute another price
+            </button>
+            <Link href="/dashboard">
+              <button className="flex items-center justify-center gap-2 border border-zinc-200 text-zinc-700 font-semibold text-[14px] px-6 py-3 rounded-xl hover:bg-zinc-50 transition-colors">
+                View your XP
+              </button>
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-screen pt-[62px]" style={{ background: "#fafafa" }}>
-      <div className="py-10 border-b border-zinc-100 bg-white">
-        <div className="max-w-2xl mx-auto px-5">
-          <Badge variant="green" className="mb-3">
-            <Trophy className="w-3.5 h-3.5" />
-            Contribute & Earn XP
-          </Badge>
-          <h1 className="text-[30px] md:text-[38px] font-black text-zinc-950 mb-2">
-            Share what you paid.
+    <div className="vf-page">
+      {/* Header */}
+      <div className="bg-white border-b border-zinc-100 py-10">
+        <div className="container">
+          <div className="flex items-center gap-2 mb-3">
+            <Zap className="w-4 h-4 text-amber-500" />
+            <span className="text-[12px] font-semibold text-zinc-500 uppercase tracking-wide">
+              Earn XP · Help travelers
+            </span>
+          </div>
+          <h1 className="text-[28px] md:text-[38px] font-black text-zinc-950 mb-3 leading-tight">
+            Contribute a price
           </h1>
-          <p className="text-[15px] text-zinc-500">
-            Your price report helps thousands of future travelers avoid being
-            overcharged. Earn 50 XP for every verified report.
+          <p className="text-[15px] text-zinc-500 max-w-xl leading-relaxed">
+            Share what you paid so future travelers know the real local price.
+            Every verified contribution earns you 50 XP and helps protect others
+            from being overcharged.
           </p>
         </div>
       </div>
 
-      <div className="max-w-2xl mx-auto px-5 py-8">
-        {/* XP cards */}
-        <div className="grid grid-cols-3 gap-3 mb-8">
-          {[
-            { icon: "⚡", label: "Price report", xp: "+50 XP" },
-            { icon: "📷", label: "With receipt", xp: "+30 XP" },
-            { icon: "⭐", label: "With review", xp: "+20 XP" },
-          ].map((item) => (
-            <div key={item.label} className="bg-white rounded-2xl border border-zinc-100 p-3 text-center">
-              <div className="text-2xl mb-1">{item.icon}</div>
-              <p className="text-[10px] text-zinc-500 mb-0.5">{item.label}</p>
-              <p className="text-[14px] font-bold text-green-600">{item.xp}</p>
-            </div>
-          ))}
-        </div>
-
-        {/* Progress steps */}
-        <div className="flex items-center gap-0 mb-8">
-          {STEPS.map((s, i) => {
-            const Icon = s.icon;
-            const done = step > s.id;
-            const active = step === s.id;
-            return (
-              <div key={s.id} className="flex items-center flex-1">
-                <div className="flex flex-col items-center">
-                  <div
-                    className="w-9 h-9 rounded-full flex items-center justify-center transition-all"
-                    style={{
-                      background: done ? "#16a34a" : active ? "#f0fdf4" : "#f4f4f5",
-                      border: active ? "2px solid #16a34a" : done ? "2px solid #16a34a" : "2px solid #e4e4e7",
-                    }}
-                  >
-                    {done ? (
-                      <CheckCircle className="w-4 h-4 text-white" />
-                    ) : (
-                      <Icon className={`w-4 h-4 ${active ? "text-green-600" : "text-zinc-400"}`} />
-                    )}
-                  </div>
-                  <p
-                    className="text-[10px] font-medium mt-1 whitespace-nowrap"
-                    style={{ color: active ? "#16a34a" : done ? "#16a34a" : "#a1a1aa" }}
-                  >
-                    {s.label}
+      <div className="container py-8">
+        <div className="grid md:grid-cols-[1fr_320px] gap-8">
+          {/* Form */}
+          <div>
+            {/* Login prompt */}
+            {!user && (
+              <div
+                className="rounded-2xl p-5 mb-6 flex items-center gap-4"
+                style={{ background: "#fffbeb", border: "1px solid #fde68a" }}
+              >
+                <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-[13px] font-bold text-amber-900">Sign in to earn XP</p>
+                  <p className="text-[12px] text-amber-700">
+                    You can still contribute without an account, but you won't earn XP or badges.
                   </p>
                 </div>
-                {i < STEPS.length - 1 && (
-                  <div
-                    className="flex-1 h-px mx-2 mb-4"
-                    style={{ background: step > s.id ? "#16a34a" : "#e4e4e7" }}
-                  />
-                )}
+                <Link href="/auth/login?next=/contribute">
+                  <button className="shrink-0 text-[12px] font-bold text-amber-800 border border-amber-300 bg-amber-100 hover:bg-amber-200 px-3 py-1.5 rounded-xl transition-colors">
+                    Sign in
+                  </button>
+                </Link>
               </div>
-            );
-          })}
-        </div>
+            )}
 
-        {/* Form card */}
-        <div className="bg-white rounded-2xl border border-zinc-100 p-6 shadow-sm">
+            <div className="bg-white rounded-2xl border border-zinc-100 p-6">
+              <StepIndicator current={step} />
 
-          {/* Step 1: Product */}
-          {step === 1 && (
-            <div className="space-y-4">
-              <h2 className="text-[18px] font-bold text-zinc-900">What did you buy?</h2>
+              {/* Step 1 — Product */}
+              {step === 1 && (
+                <div className="space-y-4 animate-fade-up">
+                  <h3 className="text-[17px] font-bold text-zinc-900 mb-4">
+                    What did you buy?
+                  </h3>
 
-              <div>
-                <label className="block text-[12px] font-semibold text-zinc-500 uppercase tracking-wide mb-1.5">
-                  Product or service *
-                </label>
-                <input
-                  value={form.product}
-                  onChange={(e) => update("product", e.target.value)}
-                  placeholder="e.g. Kashmiri Carpet, Auto rickshaw ride, Hotel room"
-                  className="w-full rounded-xl border px-3.5 py-2.5 text-[14px] text-zinc-800 placeholder:text-zinc-400"
-                  style={{
-                    outline: "none",
-                    borderColor: errors.product ? "#dc2626" : "#e4e4e7",
-                  }}
-                />
-                {errors.product && <p className="text-[11px] text-red-500 mt-1">{errors.product}</p>}
-              </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-zinc-500 uppercase tracking-wide mb-1.5">
+                      Product or service name *
+                    </label>
+                    <input
+                      type="text"
+                      value={form.product}
+                      onChange={(e) => updateForm("product", e.target.value)}
+                      placeholder="e.g. Kashmiri Carpet, Auto ride, Pani Puri, Hotel room"
+                      className="w-full rounded-xl border border-zinc-200 px-3.5 py-2.5 text-[14px] text-zinc-800 placeholder:text-zinc-400 bg-white"
+                      style={{ outline: "none" }}
+                      autoFocus
+                    />
+                  </div>
 
-              <div>
-                <label className="block text-[12px] font-semibold text-zinc-500 uppercase tracking-wide mb-1.5">
-                  Category *
-                </label>
-                <select
-                  value={form.category}
-                  onChange={(e) => update("category", e.target.value)}
-                  className="w-full rounded-xl border px-3.5 py-2.5 text-[14px] text-zinc-700"
-                  style={{ outline: "none", borderColor: errors.category ? "#dc2626" : "#e4e4e7" }}
-                >
-                  <option value="">Select category</option>
-                  {CATEGORIES.map((cat) => (
-                    <option key={cat.id} value={cat.id}>
-                      {cat.label}
-                    </option>
-                  ))}
-                </select>
-                {errors.category && <p className="text-[11px] text-red-500 mt-1">{errors.category}</p>}
-              </div>
-
-              <Button variant="primary" size="lg" className="w-full" onClick={handleNext}>
-                Continue <ArrowRight className="w-4 h-4" />
-              </Button>
-            </div>
-          )}
-
-          {/* Step 2: Price & Location */}
-          {step === 2 && (
-            <div className="space-y-4">
-              <h2 className="text-[18px] font-bold text-zinc-900">Price & location details</h2>
-
-              <div>
-                <label className="block text-[12px] font-semibold text-zinc-500 uppercase tracking-wide mb-1.5">
-                  Price you paid (₹) *
-                </label>
-                <div className="relative">
-                  <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-400 font-bold">₹</span>
-                  <input
-                    type="number"
-                    min="1"
-                    value={form.pricePaid}
-                    onChange={(e) => update("pricePaid", e.target.value)}
-                    placeholder="0"
-                    className="w-full rounded-xl border pl-8 pr-3.5 py-2.5 text-[15px] font-bold text-zinc-900"
-                    style={{ outline: "none", borderColor: errors.pricePaid ? "#dc2626" : "#e4e4e7" }}
-                  />
-                </div>
-                {errors.pricePaid && <p className="text-[11px] text-red-500 mt-1">{errors.pricePaid}</p>}
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-[12px] font-semibold text-zinc-500 uppercase tracking-wide mb-1.5">
-                    City *
-                  </label>
-                  <input
-                    value={form.city}
-                    onChange={(e) => update("city", e.target.value)}
-                    placeholder="e.g. Jaipur"
-                    className="w-full rounded-xl border border-zinc-200 px-3.5 py-2.5 text-[14px] text-zinc-800"
-                    style={{ outline: "none", borderColor: errors.city ? "#dc2626" : "#e4e4e7" }}
-                  />
-                  {errors.city && <p className="text-[11px] text-red-500 mt-1">{errors.city}</p>}
-                </div>
-                <div>
-                  <label className="block text-[12px] font-semibold text-zinc-500 uppercase tracking-wide mb-1.5">
-                    State
-                  </label>
-                  <input
-                    value={form.state}
-                    onChange={(e) => update("state", e.target.value)}
-                    placeholder="e.g. Rajasthan"
-                    className="w-full rounded-xl border border-zinc-200 px-3.5 py-2.5 text-[14px] text-zinc-800"
-                    style={{ outline: "none" }}
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-[12px] font-semibold text-zinc-500 uppercase tracking-wide mb-1.5">
-                  Shop name (optional)
-                </label>
-                <input
-                  value={form.shopName}
-                  onChange={(e) => update("shopName", e.target.value)}
-                  placeholder="e.g. Ram Handicrafts, Sunrise Hotel"
-                  className="w-full rounded-xl border border-zinc-200 px-3.5 py-2.5 text-[14px] text-zinc-800"
-                  style={{ outline: "none" }}
-                />
-              </div>
-
-              <div>
-                <label className="block text-[12px] font-semibold text-zinc-500 uppercase tracking-wide mb-1.5">
-                  Market name (optional)
-                </label>
-                <input
-                  value={form.marketName}
-                  onChange={(e) => update("marketName", e.target.value)}
-                  placeholder="e.g. Johari Bazaar, Chandni Chowk"
-                  className="w-full rounded-xl border border-zinc-200 px-3.5 py-2.5 text-[14px] text-zinc-800"
-                  style={{ outline: "none" }}
-                />
-              </div>
-
-              {/* Star rating */}
-              <div>
-                <label className="block text-[12px] font-semibold text-zinc-500 uppercase tracking-wide mb-2">
-                  Your experience
-                </label>
-                <div className="flex items-center gap-2">
-                  {[1, 2, 3, 4, 5].map((s) => (
-                    <button
-                      key={s}
-                      onClick={() => update("rating", s)}
-                      className="transition-transform hover:scale-110"
+                  <div>
+                    <label className="block text-[11px] font-semibold text-zinc-500 uppercase tracking-wide mb-1.5">
+                      Category
+                    </label>
+                    <select
+                      value={form.category}
+                      onChange={(e) => updateForm("category", e.target.value)}
+                      className="w-full rounded-xl border border-zinc-200 px-3.5 py-2.5 text-[14px] text-zinc-700 bg-white"
+                      style={{ outline: "none" }}
                     >
-                      <Star
-                        className="w-7 h-7"
-                        style={{
-                          fill: s <= form.rating ? "#f59e0b" : "none",
-                          color: s <= form.rating ? "#f59e0b" : "#d4d4d8",
-                        }}
-                      />
-                    </button>
-                  ))}
-                  {form.rating > 0 && (
-                    <span className="text-[13px] font-medium text-zinc-600 ml-1">
-                      {STAR_LABELS[form.rating - 1]}
-                    </span>
+                      <option value="">Select a category</option>
+                      {CATEGORIES.map((cat) => (
+                        <option key={cat.id} value={cat.id}>
+                          {cat.icon} {cat.label}
+                        </option>
+                      ))}
+                      <option value="other">Other (specify)</option>
+                    </select>
+                  </div>
+
+                  {form.category === "other" && (
+                    <input
+                      type="text"
+                      value={form.customCat}
+                      onChange={(e) => updateForm("customCat", e.target.value)}
+                      placeholder="Describe the category"
+                      className="w-full rounded-xl border border-zinc-200 px-3.5 py-2.5 text-[14px] text-zinc-700 bg-white"
+                      style={{ outline: "none" }}
+                    />
                   )}
                 </div>
-              </div>
+              )}
 
-              <textarea
-                value={form.review}
-                onChange={(e) => update("review", e.target.value)}
-                placeholder="Share your experience (optional)..."
-                rows={3}
-                className="w-full rounded-xl border border-zinc-200 px-3.5 py-2.5 text-[14px] text-zinc-800 placeholder:text-zinc-400 resize-none"
-                style={{ outline: "none" }}
-              />
+              {/* Step 2 — Price */}
+              {step === 2 && (
+                <div className="space-y-4 animate-fade-up">
+                  <h3 className="text-[17px] font-bold text-zinc-900 mb-4">
+                    What did you pay?
+                  </h3>
 
-              <div className="flex gap-2">
-                <Button variant="secondary" size="md" onClick={() => setStep(1)} className="flex-1">
-                  Back
-                </Button>
-                <Button variant="primary" size="md" onClick={handleNext} className="flex-1">
-                  Continue <ArrowRight className="w-4 h-4" />
-                </Button>
-              </div>
-            </div>
-          )}
-
-          {/* Step 3: Receipt upload */}
-          {step === 3 && (
-            <div className="space-y-4">
-              <div>
-                <h2 className="text-[18px] font-bold text-zinc-900 mb-1">Upload receipt (optional)</h2>
-                <p className="text-[13px] text-zinc-500">
-                  A receipt earns you +30 bonus XP and increases report credibility.
-                  Our AI auto-extracts the details.
-                </p>
-              </div>
-
-              {/* File upload area */}
-              <label className="flex flex-col items-center justify-center border-2 border-dashed border-zinc-200 hover:border-green-300 rounded-2xl p-8 cursor-pointer transition-colors">
-                <input type="file" accept="image/*,.pdf" className="sr-only" onChange={handleFileUpload} />
-
-                {form.receiptFile ? (
-                  <div className="text-center">
-                    <CheckCircle className="w-10 h-10 text-green-500 mx-auto mb-2" />
-                    <p className="text-[14px] font-semibold text-zinc-700">{form.receiptFile.name}</p>
-                    <p className="text-[12px] text-zinc-400 mt-0.5">
-                      {(form.receiptFile.size / 1024).toFixed(1)} KB
-                    </p>
-                  </div>
-                ) : (
-                  <div className="text-center">
-                    <div className="w-12 h-12 rounded-2xl bg-green-50 flex items-center justify-center mx-auto mb-3">
-                      <Camera className="w-6 h-6 text-green-500" />
+                  <div>
+                    <label className="block text-[11px] font-semibold text-zinc-500 uppercase tracking-wide mb-1.5">
+                      Price you paid (₹) *
+                    </label>
+                    <div className="flex items-center gap-2 bg-white rounded-xl border border-zinc-200 px-3.5 py-2.5 focus-within:border-green-400 transition-colors">
+                      <span className="text-[18px] font-bold text-zinc-400">₹</span>
+                      <input
+                        type="number"
+                        value={form.pricePaid}
+                        onChange={(e) => updateForm("pricePaid", e.target.value)}
+                        placeholder="e.g. 350"
+                        min="1"
+                        className="flex-1 text-[18px] font-bold text-zinc-900 bg-transparent"
+                        style={{ outline: "none", border: "none" }}
+                        autoFocus
+                      />
                     </div>
-                    <p className="text-[14px] font-semibold text-zinc-700 mb-1">
-                      Tap to upload receipt or bill
+                    <p className="text-[11px] text-zinc-400 mt-1 px-1">
+                      Enter the actual amount you paid — after any bargaining.
                     </p>
-                    <p className="text-[12px] text-zinc-400">JPG, PNG, PDF — max 5MB</p>
                   </div>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-zinc-500 uppercase tracking-wide mb-1.5">
+                      Quality received
+                    </label>
+                    <div className="grid grid-cols-4 gap-2">
+                      {["poor", "fair", "good", "excellent"].map((q) => (
+                        <button
+                          key={q}
+                          type="button"
+                          onClick={() => updateForm("quality", q)}
+                          className="py-2 px-2 rounded-xl border text-[12px] font-semibold transition-all capitalize"
+                          style={{
+                            background:  form.quality === q ? "#f0fdf4" : "#fff",
+                            borderColor: form.quality === q ? "#bbf7d0" : "#e4e4e7",
+                            color:       form.quality === q ? "#16a34a" : "#71717a",
+                          }}
+                        >
+                          {q}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-zinc-500 uppercase tracking-wide mb-1.5">
+                      Any additional notes (optional)
+                    </label>
+                    <textarea
+                      value={form.notes}
+                      onChange={(e) => updateForm("notes", e.target.value)}
+                      placeholder="e.g. Fixed price, heavily bargained, tourist area, quality was good..."
+                      rows={2}
+                      className="w-full rounded-xl border border-zinc-200 px-3.5 py-2.5 text-[14px] text-zinc-800 placeholder:text-zinc-400 bg-white resize-none"
+                      style={{ outline: "none" }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Step 3 — Location */}
+              {step === 3 && (
+                <div className="space-y-4 animate-fade-up">
+                  <h3 className="text-[17px] font-bold text-zinc-900 mb-4">
+                    Where did you buy it?
+                  </h3>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-zinc-500 uppercase tracking-wide mb-1.5">
+                      City *
+                    </label>
+                    <div className="flex items-center gap-2 bg-white rounded-xl border border-zinc-200 px-3.5 py-2.5 focus-within:border-green-400 transition-colors">
+                      <MapPin className="w-4 h-4 text-zinc-400 shrink-0" />
+                      <input
+                        type="text"
+                        value={form.city}
+                        onChange={(e) => updateForm("city", e.target.value)}
+                        placeholder="e.g. Jaipur, Delhi, Mumbai"
+                        className="flex-1 text-[14px] text-zinc-800 placeholder:text-zinc-400 bg-transparent"
+                        style={{ outline: "none", border: "none" }}
+                        autoFocus
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-zinc-500 uppercase tracking-wide mb-1.5">
+                      Market or area (optional but helpful)
+                    </label>
+                    <input
+                      type="text"
+                      value={form.marketName}
+                      onChange={(e) => updateForm("marketName", e.target.value)}
+                      placeholder="e.g. Johari Bazaar, Chandni Chowk, Sarojini Nagar"
+                      className="w-full rounded-xl border border-zinc-200 px-3.5 py-2.5 text-[14px] text-zinc-800 placeholder:text-zinc-400 bg-white"
+                      style={{ outline: "none" }}
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-zinc-500 uppercase tracking-wide mb-1.5">
+                      Shop name (optional)
+                    </label>
+                    <input
+                      type="text"
+                      value={form.shopName}
+                      onChange={(e) => updateForm("shopName", e.target.value)}
+                      placeholder="e.g. Rajasthan Emporium (leave blank if unknown)"
+                      className="w-full rounded-xl border border-zinc-200 px-3.5 py-2.5 text-[14px] text-zinc-800 placeholder:text-zinc-400 bg-white"
+                      style={{ outline: "none" }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Step 4 — Review */}
+              {step === 4 && (
+                <div className="space-y-4 animate-fade-up">
+                  <h3 className="text-[17px] font-bold text-zinc-900 mb-4">
+                    Review and submit
+                  </h3>
+
+                  <div className="rounded-2xl border border-zinc-100 overflow-hidden">
+                    {[
+                      { label: "Product",   value: form.product   },
+                      { label: "Category",  value: form.category === "other" ? form.customCat : (CATEGORIES.find(c => c.id === form.category)?.label || "—") },
+                      { label: "Price paid",value: `₹${Number(form.pricePaid).toLocaleString()}` },
+                      { label: "Quality",   value: form.quality   },
+                      { label: "City",      value: form.city      },
+                      { label: "Market",    value: form.marketName || "—" },
+                      { label: "Shop",      value: form.shopName  || "—" },
+                    ].map(({ label, value }) => (
+                      <div key={label} className="flex items-center justify-between px-4 py-3 border-b border-zinc-50 last:border-0">
+                        <span className="text-[12px] font-semibold text-zinc-500 uppercase tracking-wide">
+                          {label}
+                        </span>
+                        <span className="text-[14px] font-semibold text-zinc-900 max-w-[200px] text-right truncate">
+                          {value}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+
+                  {error && (
+                    <div className="bg-red-50 border border-red-100 rounded-xl px-4 py-3 flex items-center gap-2">
+                      <AlertTriangle className="w-4 h-4 text-red-500 shrink-0" />
+                      <p className="text-[13px] text-red-600">{error}</p>
+                    </div>
+                  )}
+
+                  <div
+                    className="rounded-xl p-4"
+                    style={{ background: "#f0fdf4", border: "1px solid #dcfce7" }}
+                  >
+                    <div className="flex items-center gap-2">
+                      <Zap className="w-4 h-4 text-amber-500" />
+                      <p className="text-[13px] font-bold text-green-800">
+                        You will earn +50 XP for this contribution
+                      </p>
+                    </div>
+                    {!user && (
+                      <p className="text-[11px] text-green-600 mt-1">
+                        Sign in to claim your XP and badge.
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Navigation buttons */}
+              <div className="flex items-center justify-between mt-6 pt-6 border-t border-zinc-100">
+                {step > 1 ? (
+                  <button
+                    onClick={() => setStep((s) => s - 1)}
+                    className="text-[13px] font-medium text-zinc-500 border border-zinc-200 px-4 py-2.5 rounded-xl hover:bg-zinc-50 transition-colors"
+                  >
+                    Back
+                  </button>
+                ) : (
+                  <div />
                 )}
-              </label>
 
-              {/* OCR loading */}
-              {ocrLoading && (
-                <div className="flex items-center gap-2.5 bg-blue-50 border border-blue-100 rounded-xl p-3.5">
-                  <Loader2 className="w-4 h-4 text-blue-500 animate-spin shrink-0" />
-                  <p className="text-[13px] text-blue-700">AI is reading your receipt...</p>
-                </div>
-              )}
-
-              {/* OCR result */}
-              {ocrResult && (
-                <div className="bg-green-50 border border-green-100 rounded-xl p-4">
-                  <div className="flex items-center gap-2 mb-2">
-                    <Zap className="w-4 h-4 text-green-600" />
-                    <p className="text-[12px] font-semibold text-green-700">AI auto-filled from receipt</p>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2 text-[12px]">
-                    {ocrResult.product && <div><span className="text-zinc-400">Product: </span><span className="font-medium text-zinc-700">{ocrResult.product}</span></div>}
-                    {ocrResult.amount && <div><span className="text-zinc-400">Amount: </span><span className="font-medium text-zinc-700">₹{ocrResult.amount}</span></div>}
-                    {ocrResult.shopName && <div><span className="text-zinc-400">Shop: </span><span className="font-medium text-zinc-700">{ocrResult.shopName}</span></div>}
-                    {ocrResult.date && <div><span className="text-zinc-400">Date: </span><span className="font-medium text-zinc-700">{ocrResult.date}</span></div>}
-                  </div>
-                </div>
-              )}
-
-              {errors.submit && (
-                <div className="bg-red-50 border border-red-100 rounded-xl p-3.5">
-                  <p className="text-[13px] text-red-600">{errors.submit}</p>
-                </div>
-              )}
-
-              {/* Summary before submit */}
-              <div className="bg-zinc-50 rounded-xl p-4 space-y-1.5">
-                <p className="text-[12px] font-semibold text-zinc-500 uppercase tracking-wide mb-2">
-                  Submission summary
-                </p>
-                {[
-                  { label: "Product", value: form.product },
-                  { label: "Price paid", value: `₹${form.pricePaid}` },
-                  { label: "City", value: form.city },
-                  form.shopName && { label: "Shop", value: form.shopName },
-                ].filter(Boolean).map((item) => (
-                  <div key={item.label} className="flex justify-between text-[12px]">
-                    <span className="text-zinc-400">{item.label}</span>
-                    <span className="font-semibold text-zinc-700">{item.value}</span>
-                  </div>
-                ))}
-                <div className="flex justify-between text-[13px] pt-2 border-t border-zinc-200 mt-2">
-                  <span className="text-zinc-500">XP to earn</span>
-                  <span className="font-bold text-green-600">
-                    +{50 + (form.receiptFile ? 30 : 0) + (form.review ? 20 : 0)} XP
-                  </span>
-                </div>
+                {step < 4 ? (
+                  <button
+                    onClick={() => setStep((s) => s + 1)}
+                    disabled={!canProceed()}
+                    className="flex items-center gap-2 btn-green text-[14px] px-6 py-2.5 rounded-xl disabled:opacity-50"
+                  >
+                    Continue <ChevronRight className="w-4 h-4" />
+                  </button>
+                ) : (
+                  <button
+                    onClick={submit}
+                    disabled={saving}
+                    className="flex items-center gap-2 btn-green text-[14px] px-6 py-2.5 rounded-xl disabled:opacity-60"
+                  >
+                    {saving ? (
+                      <><Loader2 className="w-4 h-4 animate-spin" /> Submitting...</>
+                    ) : (
+                      <><Upload className="w-4 h-4" /> Submit contribution</>
+                    )}
+                  </button>
+                )}
               </div>
-
-              <div className="flex gap-2">
-                <Button variant="secondary" size="md" onClick={() => setStep(2)} className="flex-1">
-                  Back
-                </Button>
-                <Button
-                  variant="primary"
-                  size="md"
-                  onClick={handleSubmit}
-                  loading={loading}
-                  className="flex-1"
-                >
-                  Submit report
-                </Button>
-              </div>
-            </div>
-          )}
-
-          {/* Step 4: Success */}
-          {step === 4 && (
-            <div className="text-center py-6">
-              <div className="w-20 h-20 rounded-full bg-green-50 flex items-center justify-center mx-auto mb-5">
-                <CheckCircle className="w-10 h-10 text-green-500" />
-              </div>
-              <h2 className="text-[22px] font-black text-zinc-950 mb-2">
-                Thank you! 🎉
-              </h2>
-              <p className="text-[14px] text-zinc-500 mb-2">
-                Your price report has been submitted and will help future travelers.
-              </p>
-              <div className="inline-flex items-center gap-2 bg-green-50 border border-green-100 px-4 py-2 rounded-full mb-6">
-                <Zap className="w-4 h-4 text-green-600" />
-                <span className="text-[14px] font-bold text-green-700">
-                  +{50 + (form.receiptFile ? 30 : 0) + (form.review ? 20 : 0)} XP earned!
-                </span>
-              </div>
-              <div className="flex gap-3">
-                <a href="/check-price" className="flex-1">
-                  <Button variant="primary" size="md" className="w-full">
-                    Check another price
-                  </Button>
-                </a>
-                <button
-                  onClick={() => {
-                    setStep(1);
-                    setForm({ product: "", category: "", pricePaid: "", shopName: "", city: "", state: "", marketName: "", rating: 0, review: "", receiptFile: null });
-                    setOcrResult(null);
-                    setSuccess(false);
-                  }}
-                  className="flex-1 border border-zinc-200 text-zinc-700 font-semibold text-[14px] py-2.5 rounded-xl hover:bg-zinc-50 transition-colors"
-                >
-                  Submit another
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Leaderboard preview */}
-        {step !== 4 && (
-          <div className="mt-6 bg-white rounded-2xl border border-zinc-100 p-5">
-            <div className="flex items-center gap-2 mb-4">
-              <Trophy className="w-4 h-4 text-amber-500" />
-              <h3 className="text-[14px] font-bold text-zinc-900">Top contributors this month</h3>
-            </div>
-            <div className="space-y-2.5">
-              {[
-                { rank: 1, name: "Rahul M.", city: "Jaipur", xp: 4200, badge: "🥇" },
-                { rank: 2, name: "Priya S.", city: "Mumbai", xp: 3840, badge: "🥈" },
-                { rank: 3, name: "Arjun K.", city: "Delhi", xp: 3120, badge: "🥉" },
-              ].map((c) => (
-                <div key={c.rank} className="flex items-center gap-3">
-                  <span className="text-lg">{c.badge}</span>
-                  <div className="flex-1">
-                    <p className="text-[13px] font-semibold text-zinc-800">{c.name}</p>
-                    <p className="text-[11px] text-zinc-400">{c.city}</p>
-                  </div>
-                  <span className="text-[12px] font-bold text-green-600">+{c.xp.toLocaleString()} XP</span>
-                </div>
-              ))}
             </div>
           </div>
-        )}
+
+          {/* Sidebar */}
+          <div className="space-y-5">
+            {/* XP info */}
+            <div className="bg-white rounded-2xl border border-zinc-100 p-5">
+              <h3 className="text-[14px] font-bold text-zinc-900 mb-4">Earn XP</h3>
+              <div className="space-y-2.5">
+                {[
+                  { action: "Submit a price report",     xp: "+50 XP"  },
+                  { action: "Report gets verified",      xp: "+30 XP"  },
+                  { action: "Report gets 10 upvotes",    xp: "+20 XP"  },
+                  { action: "Upload a receipt photo",    xp: "+80 XP"  },
+                  { action: "Report a scam",             xp: "+40 XP"  },
+                ].map(({ action, xp }) => (
+                  <div key={action} className="flex items-center justify-between">
+                    <p className="text-[12px] text-zinc-600">{action}</p>
+                    <span className="text-[12px] font-bold text-green-600">{xp}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Real leaderboard */}
+            <div className="bg-white rounded-2xl border border-zinc-100 p-5">
+              <div className="flex items-center gap-2 mb-4">
+                <Trophy className="w-4 h-4 text-amber-500" />
+                <h3 className="text-[14px] font-bold text-zinc-900">
+                  Top contributors this month
+                </h3>
+              </div>
+              <Leaderboard />
+            </div>
+
+            {/* Why contribute */}
+            <div
+              className="rounded-2xl p-5"
+              style={{ background: "linear-gradient(135deg,#f0fdf4,#dcfce7)", border: "1px solid #bbf7d0" }}
+            >
+              <h3 className="text-[13px] font-bold text-green-900 mb-2">
+                Why contribute?
+              </h3>
+              <p className="text-[12px] text-green-700 leading-relaxed">
+                Every price you share makes Verifee's AI more accurate for
+                the next traveler. The ML pipeline uses your verified data
+                to detect anomalies and catch tourist overpricing.
+              </p>
+              <Link href="/check-price">
+                <button className="mt-3 text-[12px] font-semibold text-green-700 flex items-center gap-1 hover:underline">
+                  See how it's used <ArrowRight className="w-3.5 h-3.5" />
+                </button>
+              </Link>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
