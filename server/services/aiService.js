@@ -27,9 +27,9 @@ const GROQ_MODEL =
 // GROQ
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function callGroq(prompt, systemPrompt = "", options = {}) {
+async function callGroq(prompt, systemPrompt, options = {}) {
   if (!GROQ_KEY) {
-    throw new Error("GROQ_API_KEY not set in .env");
+    throw new Error("AI service is not configured.");
   }
 
   const messages = [];
@@ -46,104 +46,67 @@ async function callGroq(prompt, systemPrompt = "", options = {}) {
     content: prompt,
   });
 
-  const model = options.model || GROQ_MODEL;
-
-  const body = {
-    model,
-
-    messages,
-
-    temperature:
-      options.temperature !== undefined
-        ? options.temperature
-        : 0.2,
-
-    // Groq recommends max_completion_tokens for reasoning models.
-    max_completion_tokens:
-      options.maxTokens || 4096,
-
-    stream: false,
-  };
-
-  // GPT-OSS is a reasoning model.
-  // Disable reasoning when possible so the response budget is
-  // actually used for the JSON/text we need.
-  if (
-    model === "openai/gpt-oss-20b" ||
-    model === "openai/gpt-oss-120b"
-  ) {
-    body.reasoning_effort =
-      options.reasoningEffort || "low";
-
-    body.include_reasoning = false;
-  }
-
-  // JSON mode.
-  // IMPORTANT: the prompt must explicitly request JSON.
-  if (options.json === true) {
-    body.response_format = {
-      type: "json_object",
-    };
-  }
+  const maxTokens = options.maxTokens || 700;
 
   const res = await fetch(
     "https://api.groq.com/openai/v1/chat/completions",
     {
       method: "POST",
-
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${GROQ_KEY}`,
       },
-
-      body: JSON.stringify(body),
+      body: JSON.stringify({
+        model: options.model || GROQ_MODEL,
+        messages,
+        temperature: options.temperature ?? 0.2,
+        max_tokens: maxTokens,
+      }),
     }
   );
 
-  const responseText = await res.text();
-
   if (!res.ok) {
+    const errorText = await res.text();
+
+    // Keep technical details in server logs only
+    console.error("Groq API error:", {
+      status: res.status,
+      response: errorText,
+    });
+
+    // User-friendly message
+    if (res.status === 429) {
+      throw new Error(
+        "AI service is temporarily busy. Please wait a few seconds and try again."
+      );
+    }
+
+    if (res.status === 401) {
+      throw new Error(
+        "AI service authentication failed. Please try again later."
+      );
+    }
+
+    if (res.status === 404) {
+      throw new Error(
+        "The AI model is temporarily unavailable. Please try again later."
+      );
+    }
+
     throw new Error(
-      `Groq error ${res.status}: ${responseText}`
+      "The AI service is temporarily unavailable. Please try again later."
     );
   }
 
-  let data;
+  const data = await res.json();
 
-  try {
-    data = JSON.parse(responseText);
-  } catch {
-    throw new Error(
-      `Groq returned invalid API JSON: ${responseText.slice(
-        0,
-        1000
-      )}`
-    );
-  }
+  const content = data?.choices?.[0]?.message?.content;
 
-  const choice = data?.choices?.[0];
-
-  if (!choice) {
-    throw new Error(
-      `Groq returned no choices: ${JSON.stringify(data).slice(
-        0,
-        1000
-      )}`
-    );
-  }
-
-  const content = choice?.message?.content;
-
-  // This is the exact problem you were experiencing.
   if (!content || !content.trim()) {
+    console.error("Groq returned an empty response:", data);
+
     throw new Error(
-      `Groq returned an empty response. ` +
-        `finish_reason=${choice.finish_reason || "unknown"}. ` +
-        `model=${model}. ` +
-        `reasoning_tokens=${
-          data?.usage?.completion_tokens_details
-            ?.reasoning_tokens ?? "unknown"
-        }`
+      "The AI service did not return a response. Please try again."
     );
   }
 
@@ -155,128 +118,85 @@ async function callGroq(prompt, systemPrompt = "", options = {}) {
 // GROQ WITH HISTORY
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function callGroqWithHistory(
-  message,
-  systemPrompt = "",
-  history = [],
-  options = {}
-) {
+async function callGroqWithHistory(message, systemPrompt, history = []) {
   if (!GROQ_KEY) {
-    throw new Error("GROQ_API_KEY not set in .env");
+    throw new Error("AI service is not configured.");
   }
 
-  const messages = [];
-
-  if (systemPrompt) {
-    messages.push({
+  const messages = [
+    {
       role: "system",
       content: systemPrompt,
-    });
-  }
-
-  // Keep only the last 10 messages.
-  const safeHistory = Array.isArray(history)
-    ? history.slice(-10)
-    : [];
-
-  for (const item of safeHistory) {
-    if (
-      item &&
-      (item.role === "user" ||
-        item.role === "assistant" ||
-        item.role === "system") &&
-      typeof item.content === "string"
-    ) {
-      messages.push({
-        role: item.role,
-        content: item.content,
-      });
-    }
-  }
-
-  messages.push({
-    role: "user",
-    content: message,
-  });
-
-  const model = options.model || GROQ_MODEL;
-
-  const body = {
-    model,
-
-    messages,
-
-    temperature:
-      options.temperature !== undefined
-        ? options.temperature
-        : 0.4,
-
-    max_completion_tokens:
-      options.maxTokens || 1024,
-
-    stream: false,
-  };
-
-  if (
-    model === "openai/gpt-oss-20b" ||
-    model === "openai/gpt-oss-120b"
-  ) {
-    body.reasoning_effort =
-      options.reasoningEffort || "low";
-
-    body.include_reasoning = false;
-  }
+    },
+    ...history.slice(-10),
+    {
+      role: "user",
+      content: message,
+    },
+  ];
 
   const res = await fetch(
     "https://api.groq.com/openai/v1/chat/completions",
     {
       method: "POST",
-
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${GROQ_KEY}`,
       },
-
-      body: JSON.stringify(body),
+      body: JSON.stringify({
+        model: GROQ_MODEL,
+        messages,
+        temperature: 0.4,
+        max_tokens: 500,
+      }),
     }
   );
 
-  const responseText = await res.text();
-
   if (!res.ok) {
+    const errorText = await res.text();
+
+    console.error("Groq history API error:", {
+      status: res.status,
+      response: errorText,
+    });
+
+    if (res.status === 429) {
+      throw new Error(
+        "AI service is temporarily busy. Please wait a few seconds and try again."
+      );
+    }
+
+    if (res.status === 401) {
+      throw new Error(
+        "AI service authentication failed. Please try again later."
+      );
+    }
+
+    if (res.status === 404) {
+      throw new Error(
+        "The AI model is temporarily unavailable. Please try again later."
+      );
+    }
+
     throw new Error(
-      `Groq history error ${res.status}: ${responseText}`
+      "The AI service is temporarily unavailable. Please try again later."
     );
   }
 
-  let data;
+  const data = await res.json();
 
-  try {
-    data = JSON.parse(responseText);
-  } catch {
-    throw new Error(
-      `Groq history returned invalid JSON: ${responseText.slice(
-        0,
-        1000
-      )}`
-    );
-  }
-
-  const content =
-    data?.choices?.[0]?.message?.content;
+  const content = data?.choices?.[0]?.message?.content;
 
   if (!content || !content.trim()) {
+    console.error("Groq history returned empty response:", data);
+
     throw new Error(
-      `Groq history returned an empty response. ` +
-        `finish_reason=${
-          data?.choices?.[0]?.finish_reason || "unknown"
-        }`
+      "The AI service did not return a response. Please try again."
     );
   }
 
   return content;
 }
-
 
 // ─────────────────────────────────────────────────────────────────────────────
 // OPENAI
