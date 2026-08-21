@@ -1,6 +1,10 @@
 require("dotenv").config();
 
-const AI_PROVIDER = process.env.AI_PROVIDER || "groq";
+// ─────────────────────────────────────────────────────────────────────────────
+// CONFIG
+// ─────────────────────────────────────────────────────────────────────────────
+
+const AI_PROVIDER = (process.env.AI_PROVIDER || "groq").toLowerCase();
 
 const GROQ_KEY = process.env.GROQ_API_KEY;
 const OPENAI_KEY = process.env.OPENAI_API_KEY;
@@ -12,14 +16,18 @@ const OLLAMA_URL =
 const OLLAMA_MODEL =
   process.env.OLLAMA_MODEL || "llama3.2";
 
+// IMPORTANT:
+// Your current Groq account is using GPT-OSS 20B.
+// This is a valid current Groq model.
 const GROQ_MODEL =
   process.env.GROQ_MODEL || "openai/gpt-oss-20b";
 
-// ─────────────────────────────────────────────────────────────
-// Provider implementations
-// ─────────────────────────────────────────────────────────────
 
-async function callGroq(prompt, systemPrompt, options = {}) {
+// ─────────────────────────────────────────────────────────────────────────────
+// GROQ
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function callGroq(prompt, systemPrompt = "", options = {}) {
   if (!GROQ_KEY) {
     throw new Error("GROQ_API_KEY not set in .env");
   }
@@ -38,16 +46,42 @@ async function callGroq(prompt, systemPrompt, options = {}) {
     content: prompt,
   });
 
-  const requestBody = {
-    model: options.model || GROQ_MODEL,
+  const model = options.model || GROQ_MODEL;
+
+  const body = {
+    model,
+
     messages,
-    temperature: options.temperature ?? 0.2,
-    max_tokens: options.maxTokens || 1024,
+
+    temperature:
+      options.temperature !== undefined
+        ? options.temperature
+        : 0.2,
+
+    // Groq recommends max_completion_tokens for reasoning models.
+    max_completion_tokens:
+      options.maxTokens || 4096,
+
+    stream: false,
   };
 
-  // Force JSON only when requested
-  if (options.json) {
-    requestBody.response_format = {
+  // GPT-OSS is a reasoning model.
+  // Disable reasoning when possible so the response budget is
+  // actually used for the JSON/text we need.
+  if (
+    model === "openai/gpt-oss-20b" ||
+    model === "openai/gpt-oss-120b"
+  ) {
+    body.reasoning_effort =
+      options.reasoningEffort || "low";
+
+    body.include_reasoning = false;
+  }
+
+  // JSON mode.
+  // IMPORTANT: the prompt must explicitly request JSON.
+  if (options.json === true) {
+    body.response_format = {
       type: "json_object",
     };
   }
@@ -56,36 +90,60 @@ async function callGroq(prompt, systemPrompt, options = {}) {
     "https://api.groq.com/openai/v1/chat/completions",
     {
       method: "POST",
+
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${GROQ_KEY}`,
       },
-      body: JSON.stringify(requestBody),
+
+      body: JSON.stringify(body),
     }
   );
 
+  const responseText = await res.text();
+
   if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Groq error ${res.status}: ${err}`);
+    throw new Error(
+      `Groq error ${res.status}: ${responseText}`
+    );
   }
 
-  const data = await res.json();
+  let data;
 
-  console.log(
-    "GROQ RESPONSE:",
-    JSON.stringify(data, null, 2)
-  );
-
-  const content = data?.choices?.[0]?.message?.content;
-
-  console.log(
-    "GROQ CONTENT:",
-    JSON.stringify(content)
-  );
-
-  if (!content) {
+  try {
+    data = JSON.parse(responseText);
+  } catch {
     throw new Error(
-      `Groq returned an empty response: ${JSON.stringify(data)}`
+      `Groq returned invalid API JSON: ${responseText.slice(
+        0,
+        1000
+      )}`
+    );
+  }
+
+  const choice = data?.choices?.[0];
+
+  if (!choice) {
+    throw new Error(
+      `Groq returned no choices: ${JSON.stringify(data).slice(
+        0,
+        1000
+      )}`
+    );
+  }
+
+  const content = choice?.message?.content;
+
+  // This is the exact problem you were experiencing.
+  if (!content || !content.trim()) {
+    throw new Error(
+      `Groq returned an empty response. ` +
+        `finish_reason=${choice.finish_reason || "unknown"}. ` +
+        `model=${model}. ` +
+        `reasoning_tokens=${
+          data?.usage?.completion_tokens_details
+            ?.reasoning_tokens ?? "unknown"
+        }`
     );
   }
 
@@ -93,65 +151,126 @@ async function callGroq(prompt, systemPrompt, options = {}) {
 }
 
 
-// ─────────────────────────────────────────────────────────────
-// Groq chat with history
-// ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// GROQ WITH HISTORY
+// ─────────────────────────────────────────────────────────────────────────────
 
 async function callGroqWithHistory(
   message,
-  systemPrompt,
-  history = []
+  systemPrompt = "",
+  history = [],
+  options = {}
 ) {
   if (!GROQ_KEY) {
     throw new Error("GROQ_API_KEY not set in .env");
   }
 
-  const messages = [
-    {
+  const messages = [];
+
+  if (systemPrompt) {
+    messages.push({
       role: "system",
       content: systemPrompt,
-    },
-    ...history.slice(-10),
-    {
-      role: "user",
-      content: message,
-    },
-  ];
+    });
+  }
+
+  // Keep only the last 10 messages.
+  const safeHistory = Array.isArray(history)
+    ? history.slice(-10)
+    : [];
+
+  for (const item of safeHistory) {
+    if (
+      item &&
+      (item.role === "user" ||
+        item.role === "assistant" ||
+        item.role === "system") &&
+      typeof item.content === "string"
+    ) {
+      messages.push({
+        role: item.role,
+        content: item.content,
+      });
+    }
+  }
+
+  messages.push({
+    role: "user",
+    content: message,
+  });
+
+  const model = options.model || GROQ_MODEL;
+
+  const body = {
+    model,
+
+    messages,
+
+    temperature:
+      options.temperature !== undefined
+        ? options.temperature
+        : 0.4,
+
+    max_completion_tokens:
+      options.maxTokens || 1024,
+
+    stream: false,
+  };
+
+  if (
+    model === "openai/gpt-oss-20b" ||
+    model === "openai/gpt-oss-120b"
+  ) {
+    body.reasoning_effort =
+      options.reasoningEffort || "low";
+
+    body.include_reasoning = false;
+  }
 
   const res = await fetch(
     "https://api.groq.com/openai/v1/chat/completions",
     {
       method: "POST",
+
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${GROQ_KEY}`,
       },
-      body: JSON.stringify({
-        model: GROQ_MODEL,
-        messages,
-        temperature: 0.4,
-        max_tokens: 600,
-      }),
+
+      body: JSON.stringify(body),
     }
   );
 
+  const responseText = await res.text();
+
   if (!res.ok) {
-    const err = await res.text();
     throw new Error(
-      `Groq history error ${res.status}: ${err}`
+      `Groq history error ${res.status}: ${responseText}`
     );
   }
 
-  const data = await res.json();
+  let data;
+
+  try {
+    data = JSON.parse(responseText);
+  } catch {
+    throw new Error(
+      `Groq history returned invalid JSON: ${responseText.slice(
+        0,
+        1000
+      )}`
+    );
+  }
 
   const content =
     data?.choices?.[0]?.message?.content;
 
-  if (!content) {
+  if (!content || !content.trim()) {
     throw new Error(
-      `Groq history returned empty response: ${JSON.stringify(
-        data
-      )}`
+      `Groq history returned an empty response. ` +
+        `finish_reason=${
+          data?.choices?.[0]?.finish_reason || "unknown"
+        }`
     );
   }
 
@@ -159,13 +278,13 @@ async function callGroqWithHistory(
 }
 
 
-// ─────────────────────────────────────────────────────────────
-// OpenAI
-// ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// OPENAI
+// ─────────────────────────────────────────────────────────────────────────────
 
 async function callOpenAI(
   prompt,
-  systemPrompt,
+  systemPrompt = "",
   options = {}
 ) {
   if (!OPENAI_KEY) {
@@ -188,15 +307,23 @@ async function callOpenAI(
     content: prompt,
   });
 
-  const requestBody = {
-    model: options.model || "gpt-4o-mini",
+  const body = {
+    model:
+      options.model || "gpt-4o-mini",
+
     messages,
-    temperature: options.temperature ?? 0.2,
-    max_tokens: options.maxTokens || 1024,
+
+    temperature:
+      options.temperature !== undefined
+        ? options.temperature
+        : 0.2,
+
+    max_tokens:
+      options.maxTokens || 2048,
   };
 
   if (options.json) {
-    requestBody.response_format = {
+    body.response_format = {
       type: "json_object",
     };
   }
@@ -205,30 +332,40 @@ async function callOpenAI(
     "https://api.openai.com/v1/chat/completions",
     {
       method: "POST",
+
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${OPENAI_KEY}`,
       },
-      body: JSON.stringify(requestBody),
+
+      body: JSON.stringify(body),
     }
   );
 
+  const responseText = await res.text();
+
   if (!res.ok) {
     throw new Error(
-      `OpenAI error ${res.status}: ${await res.text()}`
+      `OpenAI error ${res.status}: ${responseText}`
     );
   }
 
-  const data = await res.json();
+  let data;
+
+  try {
+    data = JSON.parse(responseText);
+  } catch {
+    throw new Error(
+      `OpenAI returned invalid API JSON`
+    );
+  }
 
   const content =
     data?.choices?.[0]?.message?.content;
 
-  if (!content) {
+  if (!content || !content.trim()) {
     throw new Error(
-      `OpenAI returned empty response: ${JSON.stringify(
-        data
-      )}`
+      "OpenAI returned an empty response"
     );
   }
 
@@ -236,13 +373,13 @@ async function callOpenAI(
 }
 
 
-// ─────────────────────────────────────────────────────────────
-// Gemini
-// ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// GEMINI
+// ─────────────────────────────────────────────────────────────────────────────
 
 async function callGemini(
   prompt,
-  systemPrompt,
+  systemPrompt = "",
   options = {}
 ) {
   if (!GEMINI_KEY) {
@@ -254,53 +391,75 @@ async function callGemini(
   const model =
     options.model || "gemini-1.5-flash";
 
-  const full = systemPrompt
+  const fullPrompt = systemPrompt
     ? `${systemPrompt}\n\n${prompt}`
     : prompt;
 
   const url =
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_KEY}`;
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent` +
+    `?key=${GEMINI_KEY}`;
+
+  const generationConfig = {
+    temperature:
+      options.temperature !== undefined
+        ? options.temperature
+        : 0.2,
+
+    maxOutputTokens:
+      options.maxTokens || 2048,
+  };
+
+  if (options.json) {
+    generationConfig.responseMimeType =
+      "application/json";
+  }
 
   const res = await fetch(url, {
     method: "POST",
+
     headers: {
       "Content-Type": "application/json",
     },
+
     body: JSON.stringify({
       contents: [
         {
           parts: [
             {
-              text: full,
+              text: fullPrompt,
             },
           ],
         },
       ],
-      generationConfig: {
-        temperature:
-          options.temperature ?? 0.2,
-        maxOutputTokens:
-          options.maxTokens || 1024,
-      },
+
+      generationConfig,
     }),
   });
 
+  const responseText = await res.text();
+
   if (!res.ok) {
     throw new Error(
-      `Gemini error ${res.status}: ${await res.text()}`
+      `Gemini error ${res.status}: ${responseText}`
     );
   }
 
-  const data = await res.json();
+  let data;
+
+  try {
+    data = JSON.parse(responseText);
+  } catch {
+    throw new Error(
+      "Gemini returned invalid API JSON"
+    );
+  }
 
   const content =
     data?.candidates?.[0]?.content?.parts?.[0]?.text;
 
-  if (!content) {
+  if (!content || !content.trim()) {
     throw new Error(
-      `Gemini returned empty response: ${JSON.stringify(
-        data
-      )}`
+      "Gemini returned an empty response"
     );
   }
 
@@ -308,13 +467,13 @@ async function callGemini(
 }
 
 
-// ─────────────────────────────────────────────────────────────
-// Ollama
-// ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// OLLAMA
+// ─────────────────────────────────────────────────────────────────────────────
 
 async function callOllama(
   prompt,
-  systemPrompt,
+  systemPrompt = "",
   options = {}
 ) {
   const messages = [];
@@ -331,42 +490,67 @@ async function callOllama(
     content: prompt,
   });
 
+  const body = {
+    model:
+      options.model || OLLAMA_MODEL,
+
+    messages,
+
+    stream: false,
+
+    options: {
+      temperature:
+        options.temperature !== undefined
+          ? options.temperature
+          : 0.2,
+
+      num_predict:
+        options.maxTokens || 2048,
+    },
+  };
+
+  // Ollama supports JSON format.
+  if (options.json) {
+    body.format = "json";
+  }
+
   const res = await fetch(
     `${OLLAMA_URL}/api/chat`,
     {
       method: "POST",
+
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        model: options.model || OLLAMA_MODEL,
-        messages,
-        stream: false,
-        options: {
-          temperature:
-            options.temperature ?? 0.2,
-          num_predict:
-            options.maxTokens || 1024,
-        },
-      }),
+
+      body: JSON.stringify(body),
     }
   );
 
+  const responseText = await res.text();
+
   if (!res.ok) {
     throw new Error(
-      `Ollama error ${res.status}: ${await res.text()}`
+      `Ollama error ${res.status}: ${responseText}`
     );
   }
 
-  const data = await res.json();
+  let data;
 
-  const content = data?.message?.content;
-
-  if (!content) {
+  try {
+    data = JSON.parse(responseText);
+  } catch {
     throw new Error(
-      `Ollama returned empty response: ${JSON.stringify(
-        data
-      )}`
+      "Ollama returned invalid API JSON"
+    );
+  }
+
+  const content =
+    data?.message?.content;
+
+  if (!content || !content.trim()) {
+    throw new Error(
+      "Ollama returned an empty response"
     );
   }
 
@@ -374,9 +558,9 @@ async function callOllama(
 }
 
 
-// ─────────────────────────────────────────────────────────────
-// Core dispatcher
-// ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// CORE AI DISPATCHER
+// ─────────────────────────────────────────────────────────────────────────────
 
 async function callAI(
   prompt,
@@ -422,14 +606,14 @@ async function callAI(
 }
 
 
-// ─────────────────────────────────────────────────────────────
-// JSON parser
-// ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// JSON PARSER
+// ─────────────────────────────────────────────────────────────────────────────
 
 function parseJSON(raw) {
   if (raw === null || raw === undefined) {
     throw new Error(
-      "AI returned null or undefined response"
+      "No response received from AI"
     );
   }
 
@@ -437,36 +621,47 @@ function parseJSON(raw) {
     return raw;
   }
 
-  const cleaned = raw
-    .replace(/```json/gi, "")
-    .replace(/```/g, "")
-    .trim();
-
-  console.log(
-    "AI RAW RESPONSE:",
-    JSON.stringify(raw)
-  );
-
-  console.log(
-    "AI CLEANED RESPONSE:",
-    JSON.stringify(cleaned)
-  );
+  let cleaned = raw.trim();
 
   if (!cleaned) {
     throw new Error(
-      "AI returned an empty response"
+      "No JSON found in AI response: empty response"
     );
   }
 
-  // If the entire response is already valid JSON
+  // Remove markdown fences.
+  cleaned = cleaned
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+
+  // First attempt: the entire response is JSON.
   try {
     return JSON.parse(cleaned);
-  } catch (_) {
-    // Continue and try extracting JSON
+  } catch {
+    // Continue with extraction.
   }
 
-  // Find first { or [
-  const start = cleaned.search(/[\[{]/);
+  // Find the first object or array.
+  const objectStart = cleaned.indexOf("{");
+  const arrayStart = cleaned.indexOf("[");
+
+  let start = -1;
+
+  if (
+    objectStart !== -1 &&
+    arrayStart !== -1
+  ) {
+    start = Math.min(
+      objectStart,
+      arrayStart
+    );
+  } else if (objectStart !== -1) {
+    start = objectStart;
+  } else if (arrayStart !== -1) {
+    start = arrayStart;
+  }
 
   if (start === -1) {
     throw new Error(
@@ -477,11 +672,18 @@ function parseJSON(raw) {
     );
   }
 
-  const end =
-    Math.max(
-      cleaned.lastIndexOf("}"),
-      cleaned.lastIndexOf("]")
-    ) + 1;
+  // Try object ending.
+  const objectEnd =
+    cleaned.lastIndexOf("}") + 1;
+
+  // Try array ending.
+  const arrayEnd =
+    cleaned.lastIndexOf("]") + 1;
+
+  const end = Math.max(
+    objectEnd,
+    arrayEnd
+  );
 
   if (end <= start) {
     throw new Error(
@@ -492,60 +694,49 @@ function parseJSON(raw) {
     );
   }
 
-  const jsonString = cleaned.slice(
-    start,
-    end
-  );
+  const jsonString =
+    cleaned.slice(start, end);
 
   try {
     return JSON.parse(jsonString);
   } catch (error) {
-    console.error(
-      "JSON PARSE ERROR:",
-      error.message
-    );
-
-    console.error(
-      "JSON STRING:",
-      jsonString
-    );
-
     throw new Error(
       `Invalid JSON returned by AI: ${jsonString.slice(
         0,
-        500
+        1000
       )}`
     );
   }
 }
 
 
-// ─────────────────────────────────────────────────────────────
-// System prompts
-// ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// SYSTEM PROMPTS
+// ─────────────────────────────────────────────────────────────────────────────
 
 const PRICE_SYSTEM = `
 You are Verifee's AI price engine for Indian markets.
 
-You know the difference between tourist prices and local prices.
+Estimate realistic Indian market prices.
 
 Return ONLY valid JSON.
-No markdown.
-No explanation.
-No code fences.
+Do not use markdown.
+Do not use code fences.
+Do not explain your answer outside the JSON.
 `;
 
 const SCAM_SYSTEM = `
 You are Verifee's scam detection AI protecting tourists in India.
 
+Analyze prices realistically.
+
 Return ONLY valid JSON.
 No markdown.
-No explanation.
 No code fences.
 `;
 
 const TRANSLATE_SYSTEM = `
-You are a shopping translator for Indian markets.
+You are Verifee's shopping translator for Indian markets.
 
 Return ONLY valid JSON.
 No markdown.
@@ -553,9 +744,9 @@ No code fences.
 `;
 
 
-// ─────────────────────────────────────────────────────────────
-// Fair Price
-// ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// FAIR PRICE
+// ─────────────────────────────────────────────────────────────────────────────
 
 exports.getFairPrice = async (
   product,
@@ -563,13 +754,13 @@ exports.getFairPrice = async (
   category
 ) => {
   const prompt = `
-Estimate fair market price for: "${product}" in ${
-    city || "India"
-  }.
+Estimate the fair market price for:
 
-Category: ${category || "general"}
+Product: "${product}"
+City: "${city || "India"}"
+Category: "${category || "general"}"
 
-Return exactly this JSON:
+Return exactly this JSON object:
 
 {
   "product": "${product}",
@@ -588,13 +779,19 @@ Return exactly this JSON:
   "trend": "Stable",
   "seasonalNote": ""
 }
+
+All prices must be INR numbers.
+confidenceScore must be between 0 and 100.
+touristPremium must be a percentage number.
+trend must be Rising, Stable, or Falling.
 `;
 
   const raw = await callAI(
     prompt,
     PRICE_SYSTEM,
     {
-      maxTokens: 800,
+      maxTokens: 2048,
+      temperature: 0.1,
       json: true,
     }
   );
@@ -603,9 +800,9 @@ Return exactly this JSON:
 };
 
 
-// ─────────────────────────────────────────────────────────────
-// Scam Detection
-// ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// SCAM DETECTION
+// ─────────────────────────────────────────────────────────────────────────────
 
 exports.detectScam = async (
   product,
@@ -613,18 +810,16 @@ exports.detectScam = async (
   city
 ) => {
   const prompt = `
-Analyze if this is a tourist scam:
+Analyze whether this is likely to be a tourist scam.
 
 Product: ${product}
-
 Offered price: ₹${offeredPrice}
-
 Location: ${city || "India"}
 
-Return exactly this JSON:
+Return exactly this JSON object:
 
 {
-  "offeredPrice": ${offeredPrice},
+  "offeredPrice": ${Number(offeredPrice) || 0},
   "fairPriceMin": 0,
   "fairPriceMax": 0,
   "scamProbability": 0,
@@ -635,13 +830,19 @@ Return exactly this JSON:
   "walkAwayAdvice": "",
   "alternatives": []
 }
+
+Rules:
+- scamProbability must be 0-100.
+- verdict must be Safe, Suspicious, or Scam.
+- alternatives must be an array of strings.
 `;
 
   const raw = await callAI(
     prompt,
     SCAM_SYSTEM,
     {
-      maxTokens: 700,
+      maxTokens: 1536,
+      temperature: 0.1,
       json: true,
     }
   );
@@ -650,9 +851,9 @@ Return exactly this JSON:
 };
 
 
-// ─────────────────────────────────────────────────────────────
-// Translation
-// ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// TRANSLATION
+// ─────────────────────────────────────────────────────────────────────────────
 
 exports.translate = async (
   text,
@@ -676,9 +877,11 @@ exports.translate = async (
     langMap[targetLang] || targetLang;
 
   const prompt = `
-Translate to ${language}: "${text}"
+Translate the following shopping phrase to ${language}:
 
-Return exactly this JSON:
+"${text}"
+
+Return exactly this JSON object:
 
 {
   "original": "${text}",
@@ -688,13 +891,22 @@ Return exactly this JSON:
   "shoppingPhraseType": "other",
   "culturalTip": ""
 }
+
+shoppingPhraseType must be one of:
+bargaining
+greeting
+question
+complaint
+thanks
+other
 `;
 
   const raw = await callAI(
     prompt,
     TRANSLATE_SYSTEM,
     {
-      maxTokens: 400,
+      maxTokens: 1024,
+      temperature: 0.1,
       json: true,
     }
   );
@@ -703,9 +915,9 @@ Return exactly this JSON:
 };
 
 
-// ─────────────────────────────────────────────────────────────
-// Chat
-// ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// CHAT
+// ─────────────────────────────────────────────────────────────────────────────
 
 exports.chat = async (
   message,
@@ -717,19 +929,69 @@ exports.chat = async (
     `
 You are Verifee's AI shopping assistant for Indian markets.
 
-You help with fair prices, scam detection, bargaining, and market info.
+You help with:
+- fair prices
+- scam detection
+- bargaining
+- market information
+- shopping translations
 
-Be direct.
-Give specific INR amounts.
-No emojis.
-Under 120 words unless asked for detail.
+Be direct and useful.
+
+Give INR amounts when relevant.
+
+Keep responses under 120 words unless the user asks for more detail.
 `;
 
-  if (history.length > 0) {
+  // If using Groq, use the history-specific function.
+  if (
+    AI_PROVIDER === "groq" &&
+    Array.isArray(history) &&
+    history.length > 0
+  ) {
     return callGroqWithHistory(
       message,
       systemPrompt,
-      history
+      history,
+      {
+        maxTokens: 1024,
+        temperature: 0.4,
+      }
+    );
+  }
+
+  // For other providers, construct the history into the prompt.
+  if (
+    Array.isArray(history) &&
+    history.length > 0
+  ) {
+    const historyText = history
+      .slice(-10)
+      .map(
+        (item) =>
+          `${item.role || "user"}: ${
+            item.content || ""
+          }`
+      )
+      .join("\n");
+
+    const prompt = `
+Conversation history:
+
+${historyText}
+
+Current user message:
+
+${message}
+`;
+
+    return callAI(
+      prompt,
+      systemPrompt,
+      {
+        maxTokens: 1024,
+        temperature: 0.4,
+      }
     );
   }
 
@@ -737,49 +999,31 @@ Under 120 words unless asked for detail.
     message,
     systemPrompt,
     {
+      maxTokens: 1024,
       temperature: 0.4,
-      maxTokens: 500,
     }
   );
 };
 
 
-// ─────────────────────────────────────────────────────────────
-// Product Recognition
-// ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// PRODUCT IMAGE RECOGNITION
+// ─────────────────────────────────────────────────────────────────────────────
 
 exports.recognizeProduct = async (
   imageBase64
 ) => {
-  if (
-    AI_PROVIDER !== "openai" ||
-    !OPENAI_KEY
-  ) {
+  if (!OPENAI_KEY) {
     throw new Error(
-      "Product image recognition requires AI_PROVIDER=openai and OPENAI_API_KEY"
+      "OPENAI_API_KEY required for product image recognition"
     );
   }
 
-  const res = await fetch(
-    "https://api.openai.com/v1/chat/completions",
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${OPENAI_KEY}`,
-      },
-      body: JSON.stringify({
-        model: "gpt-4o",
-        messages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: `
-Identify this product and estimate fair price in Indian markets.
+  const prompt = `
+Identify this product and estimate its fair price
+in Indian markets.
 
-Return ONLY JSON:
+Return ONLY valid JSON:
 
 {
   "productName": "",
@@ -792,10 +1036,34 @@ Return ONLY JSON:
   "whereToBuy": [],
   "confidence": 0
 }
-`,
+`;
+
+  const res = await fetch(
+    "https://api.openai.com/v1/chat/completions",
+    {
+      method: "POST",
+
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${OPENAI_KEY}`,
+      },
+
+      body: JSON.stringify({
+        model: "gpt-4o",
+
+        messages: [
+          {
+            role: "user",
+
+            content: [
+              {
+                type: "text",
+                text: prompt,
               },
+
               {
                 type: "image_url",
+
                 image_url: {
                   url: `data:image/jpeg;base64,${imageBase64}`,
                 },
@@ -803,7 +1071,9 @@ Return ONLY JSON:
             ],
           },
         ],
-        max_tokens: 600,
+
+        max_tokens: 1200,
+
         response_format: {
           type: "json_object",
         },
@@ -811,34 +1081,53 @@ Return ONLY JSON:
     }
   );
 
+  const responseText = await res.text();
+
   if (!res.ok) {
     throw new Error(
-      `OpenAI vision error ${res.status}: ${await res.text()}`
+      `OpenAI vision error ${res.status}: ${responseText}`
     );
   }
 
-  const data = await res.json();
+  let data;
+
+  try {
+    data = JSON.parse(responseText);
+  } catch {
+    throw new Error(
+      "OpenAI vision returned invalid API JSON"
+    );
+  }
 
   const content =
     data?.choices?.[0]?.message?.content;
+
+  if (!content) {
+    throw new Error(
+      "OpenAI vision returned empty content"
+    );
+  }
 
   return parseJSON(content);
 };
 
 
-// ─────────────────────────────────────────────────────────────
-// Receipt Parser
-// ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// RECEIPT PARSER
+// ─────────────────────────────────────────────────────────────────────────────
 
 exports.parseReceipt = async (
   textOrBase64
 ) => {
+  const text =
+    String(textOrBase64 || "").slice(0, 5000);
+
   const prompt = `
-Extract information from this receipt/bill text:
+Extract information from this Indian receipt/bill:
 
-"${textOrBase64.slice(0, 500)}"
+"${text}"
 
-Return JSON:
+Return exactly this JSON object:
 
 {
   "product": "",
@@ -849,13 +1138,17 @@ Return JSON:
   "category": "",
   "confidence": 0
 }
+
+amount must be an INR number.
+confidence must be between 0 and 100.
 `;
 
   const raw = await callAI(
     prompt,
     "You parse Indian shopping receipts. Return ONLY valid JSON.",
     {
-      maxTokens: 300,
+      maxTokens: 1024,
+      temperature: 0.1,
       json: true,
     }
   );
@@ -864,18 +1157,23 @@ Return JSON:
 };
 
 
-// ─────────────────────────────────────────────────────────────
-// Exports
-// ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// RAW AI CALLER
+// ─────────────────────────────────────────────────────────────────────────────
 
 exports.callAIRaw = callAI;
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// JSON PARSER EXPORT
+// ─────────────────────────────────────────────────────────────────────────────
 
 exports.parseJSON = parseJSON;
 
 
-// ─────────────────────────────────────────────────────────────
-// Analyze Image With Custom Prompt
-// ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// CUSTOM IMAGE ANALYSIS
+// ─────────────────────────────────────────────────────────────────────────────
 
 exports.analyzeImageWithPrompt = async (
   imageBase64,
@@ -891,22 +1189,32 @@ exports.analyzeImageWithPrompt = async (
     "https://api.openai.com/v1/chat/completions",
     {
       method: "POST",
+
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${OPENAI_KEY}`,
       },
+
       body: JSON.stringify({
         model: "gpt-4o",
+
         messages: [
           {
             role: "user",
+
             content: [
               {
                 type: "text",
-                text: prompt,
+                text: `${prompt}
+
+Return ONLY valid JSON.
+No markdown.
+No code fences.`,
               },
+
               {
                 type: "image_url",
+
                 image_url: {
                   url: `data:image/jpeg;base64,${imageBase64}`,
                 },
@@ -914,7 +1222,9 @@ exports.analyzeImageWithPrompt = async (
             ],
           },
         ],
-        max_tokens: 800,
+
+        max_tokens: 1200,
+
         response_format: {
           type: "json_object",
         },
@@ -922,34 +1232,53 @@ exports.analyzeImageWithPrompt = async (
     }
   );
 
+  const responseText = await res.text();
+
   if (!res.ok) {
     throw new Error(
-      `OpenAI vision error ${res.status}: ${await res.text()}`
+      `OpenAI vision error ${res.status}: ${responseText}`
     );
   }
 
-  const data = await res.json();
+  let data;
+
+  try {
+    data = JSON.parse(responseText);
+  } catch {
+    throw new Error(
+      "OpenAI vision returned invalid API JSON"
+    );
+  }
 
   const content =
     data?.choices?.[0]?.message?.content;
+
+  if (!content) {
+    throw new Error(
+      "OpenAI vision returned empty content"
+    );
+  }
 
   return parseJSON(content);
 };
 
 
-// ─────────────────────────────────────────────────────────────
-// Provider Info
-// ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// PROVIDER INFO
+// ─────────────────────────────────────────────────────────────────────────────
 
-exports.getProviderInfo = () => ({
-  provider: AI_PROVIDER,
+exports.getProviderInfo = () => {
+  let model = "default";
 
-  model:
-    AI_PROVIDER === "groq"
-      ? GROQ_MODEL
-      : AI_PROVIDER === "ollama"
-      ? OLLAMA_MODEL
-      : "default",
+  if (AI_PROVIDER === "groq") {
+    model = GROQ_MODEL;
+  } else if (AI_PROVIDER === "ollama") {
+    model = OLLAMA_MODEL;
+  }
 
-  status: "active",
-});
+  return {
+    provider: AI_PROVIDER,
+    model,
+    status: "active",
+  };
+};
