@@ -163,21 +163,33 @@ function parseJSON(raw) {
   if (typeof raw !== "string") return raw;
 
   const cleaned = raw
-    .replace(/```json\s*/gi, "")
-    .replace(/```\s*/g, "")
+    .replace(/```json/gi, "")
+    .replace(/```/g, "")
     .trim();
 
   const start = cleaned.search(/[\[{]/);
-  const end   = Math.max(
-    cleaned.lastIndexOf("}"),
-    cleaned.lastIndexOf("]")
-  ) + 1;
+
+  const end =
+    Math.max(
+      cleaned.lastIndexOf("}"),
+      cleaned.lastIndexOf("]")
+    ) + 1;
 
   if (start === -1 || end === 0) {
-    throw new Error(`No JSON found in AI response: ${cleaned.slice(0, 100)}`);
+    throw new Error(
+      `No JSON found in AI response: ${cleaned.slice(0, 200)}`
+    );
   }
 
-  return JSON.parse(cleaned.slice(start, end));
+  const jsonString = cleaned.slice(start, end);
+
+  try {
+    return JSON.parse(jsonString);
+  } catch (error) {
+    throw new Error(
+      `Invalid JSON returned by AI: ${jsonString.slice(0, 500)}`
+    );
+  }
 }
 
 // ── System prompts ────────────────────────────────────────────────────────────
