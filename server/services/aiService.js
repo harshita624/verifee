@@ -22,6 +22,74 @@ const OLLAMA_MODEL =
 
 
 // ============================================================
+// FIX — RETRY-WITH-BACKOFF WRAPPER
+// ============================================================
+// This is the actual fix for "one feature runs, then the very next one
+// fails". Every provider call below used a bare `fetch()` that threw
+// immediately on ANY non-ok response — including 429 (rate limited) and
+// 502/503/504 (provider momentarily overloaded), which are exactly the
+// kind of errors that go away if you just wait a second and try again.
+//
+// fetchWithRetry() replaces the bare fetch() in every provider function.
+// On a retryable status it waits (honoring the provider's Retry-After
+// header when present) and tries again, up to `retries` extra attempts,
+// before handing back the final response for the existing error-mapping
+// code below to handle exactly as it did before.
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function backoffDelay(attempt, baseDelayMs) {
+  const jitter = Math.random() * 250;
+  return baseDelayMs * Math.pow(2, attempt) + jitter;
+}
+
+const RETRYABLE_STATUSES = new Set([429, 502, 503, 504]);
+
+async function fetchWithRetry(url, fetchOptions, { retries = 2, baseDelayMs = 800 } = {}) {
+  let lastNetworkError;
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    let res;
+
+    try {
+      res = await fetch(url, fetchOptions);
+    } catch (networkErr) {
+      // DNS failure, connection reset, timeout, etc. — also worth a retry.
+      lastNetworkError = networkErr;
+      if (attempt === retries) throw networkErr;
+      await sleep(backoffDelay(attempt, baseDelayMs));
+      continue;
+    }
+
+    if (res.ok || !RETRYABLE_STATUSES.has(res.status) || attempt === retries) {
+      return res;
+    }
+
+    let delay = backoffDelay(attempt, baseDelayMs);
+    const retryAfterHeader = res.headers.get("retry-after");
+    if (retryAfterHeader) {
+      const retryAfterMs = Number(retryAfterHeader) * 1000;
+      if (!Number.isNaN(retryAfterMs) && retryAfterMs > 0) {
+        delay = Math.max(delay, retryAfterMs);
+      }
+    }
+
+    console.warn(
+      `AI request to ${url} got status ${res.status}, retrying in ${Math.round(delay)}ms ` +
+      `(attempt ${attempt + 1}/${retries})`
+    );
+
+    await sleep(delay);
+  }
+
+  // Unreachable in practice, but keeps control flow explicit.
+  throw lastNetworkError || new Error("Request failed after retries");
+}
+
+
+// ============================================================
 // HELPER - USER FRIENDLY ERRORS
 // ============================================================
 
@@ -86,7 +154,8 @@ async function callGroq(prompt, systemPrompt, options = {}) {
 
   const maxTokens = options.maxTokens || 1000;
 
-  const res = await fetch(
+  // FIX: fetch -> fetchWithRetry
+  const res = await fetchWithRetry(
     "https://api.groq.com/openai/v1/chat/completions",
     {
       method: "POST",
@@ -186,7 +255,8 @@ async function callOpenAI(prompt, systemPrompt, options = {}) {
     };
   }
 
-  const res = await fetch(
+  // FIX: fetch -> fetchWithRetry
+  const res = await fetchWithRetry(
     "https://api.openai.com/v1/chat/completions",
     {
       method: "POST",
@@ -256,7 +326,8 @@ async function callGemini(prompt, systemPrompt, options = {}) {
     `https://generativelanguage.googleapis.com/v1beta/models/${model}` +
     `:generateContent?key=${GEMINI_KEY}`;
 
-  const res = await fetch(url, {
+  // FIX: fetch -> fetchWithRetry
+  const res = await fetchWithRetry(url, {
     method: "POST",
 
     headers: {
@@ -330,7 +401,8 @@ async function callOllama(prompt, systemPrompt, options = {}) {
     content: prompt,
   });
 
-  const res = await fetch(`${OLLAMA_URL}/api/chat`, {
+  // FIX: fetch -> fetchWithRetry
+  const res = await fetchWithRetry(`${OLLAMA_URL}/api/chat`, {
     method: "POST",
 
     headers: {
@@ -873,7 +945,8 @@ exports.recognizeProduct = async (
     );
   }
 
-  const res = await fetch(
+  // FIX: fetch -> fetchWithRetry
+  const res = await fetchWithRetry(
     "https://api.openai.com/v1/chat/completions",
     {
       method: "POST",
@@ -1030,7 +1103,8 @@ exports.analyzeImageWithPrompt = async (
     );
   }
 
-  const res = await fetch(
+  // FIX: fetch -> fetchWithRetry
+  const res = await fetchWithRetry(
     "https://api.openai.com/v1/chat/completions",
     {
       method: "POST",
