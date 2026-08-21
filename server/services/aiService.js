@@ -75,6 +75,11 @@ async function callGroq(prompt, systemPrompt, options = {}) {
     });
   }
 
+  // FIX: history now flows through here too, so chat() no longer needs a separate Groq-only path
+  if (options.history && options.history.length > 0) {
+    messages.push(...options.history.slice(-10));
+  }
+
   messages.push({
     role: "user",
     content: prompt
@@ -102,6 +107,12 @@ async function callGroq(prompt, systemPrompt, options = {}) {
   if (!res.ok) {
     const errorText = await res.text();
 
+    // FIX: this was captured but never logged before, unlike every other provider function
+    console.error("Groq API error:", {
+      status: res.status,
+      response: errorText
+    });
+
     if (res.status === 429) {
       throw new Error(
         "The AI service is temporarily busy due to high usage. Please try again in a few seconds."
@@ -120,9 +131,8 @@ async function callGroq(prompt, systemPrompt, options = {}) {
       );
     }
 
-    throw new Error(
-      "The AI service is temporarily unavailable. Please try again later."
-    );
+    // FIX: was a single hardcoded string before, ignoring getAIErrorMessage's other status cases (400/403/408/5xx)
+    throw new Error(getAIErrorMessage(res.status));
   }
 
   const data = await res.json();
@@ -135,80 +145,7 @@ async function callGroq(prompt, systemPrompt, options = {}) {
     );
   }
 
-  return content;
-}
-
-
-// ============================================================
-// GROQ WITH HISTORY
-// ============================================================
-
-async function callGroqWithHistory(
-  message,
-  systemPrompt,
-  history = []
-) {
-  if (!GROQ_KEY) {
-    throw new Error("AI service is not configured.");
-  }
-
-  const messages = [
-    {
-      role: "system",
-      content: systemPrompt,
-    },
-
-    ...history.slice(-10),
-
-    {
-      role: "user",
-      content: message,
-    },
-  ];
-
-  const res = await fetch(
-    "https://api.groq.com/openai/v1/chat/completions",
-    {
-      method: "POST",
-
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${GROQ_KEY}`,
-      },
-
-      body: JSON.stringify({
-        model: GROQ_MODEL,
-        messages,
-        temperature: 0.4,
-        max_tokens: 600,
-      }),
-    }
-  );
-
-  if (!res.ok) {
-    const errorText = await res.text();
-
-    console.error("Groq history error:", {
-      status: res.status,
-      model: GROQ_MODEL,
-      response: errorText,
-    });
-
-    throw new Error(getAIErrorMessage(res.status));
-  }
-
-  const data = await res.json();
-
-  const content = data?.choices?.[0]?.message?.content;
-
-  if (!content || !content.trim()) {
-    console.error("Groq history returned empty content:", data);
-
-    throw new Error(
-      "The AI service could not complete the response. Please try again."
-    );
-  }
-
+  // FIX: added .trim() for consistency with every other provider function
   return content.trim();
 }
 
@@ -229,6 +166,11 @@ async function callOpenAI(prompt, systemPrompt, options = {}) {
       role: "system",
       content: systemPrompt,
     });
+  }
+
+  // FIX: OpenAI can now carry conversation history too
+  if (options.history && options.history.length > 0) {
+    messages.push(...options.history.slice(-10));
   }
 
   messages.push({
@@ -299,9 +241,25 @@ async function callGemini(prompt, systemPrompt, options = {}) {
 
   const model = options.model || "gemini-1.5-flash";
 
-  const fullPrompt = systemPrompt
-    ? `${systemPrompt}\n\n${prompt}`
-    : prompt;
+  // FIX: Gemini can now carry conversation history too, folded into the prompt
+  // as a transcript (kept consistent with this file's existing single-fullPrompt
+  // approach for Gemini, rather than switching to Gemini's native multi-turn
+  // `contents` array, which would be a bigger structural change).
+  let historyText = "";
+  if (options.history && options.history.length > 0) {
+    historyText =
+      options.history
+        .slice(-10)
+        .map(
+          (m) =>
+            `${m.role === "assistant" ? "Assistant" : "User"}: ${m.content}`
+        )
+        .join("\n") + "\n\n";
+  }
+
+  const fullPrompt = `${
+    systemPrompt ? systemPrompt + "\n\n" : ""
+  }${historyText}${prompt}`;
 
   const url =
     `https://generativelanguage.googleapis.com/v1beta/models/${model}` +
@@ -370,6 +328,11 @@ async function callOllama(prompt, systemPrompt, options = {}) {
       role: "system",
       content: systemPrompt,
     });
+  }
+
+  // FIX: Ollama can now carry conversation history too
+  if (options.history && options.history.length > 0) {
+    messages.push(...options.history.slice(-10));
   }
 
   messages.push({
@@ -803,20 +766,17 @@ Use specific INR amounts when appropriate.
 Keep responses under 120 words unless the user asks for detail.
 `;
 
-  if (history.length > 0) {
-    return callGroqWithHistory(
-      message,
-      systemPrompt,
-      history
-    );
-  }
-
+  // FIX: this used to branch to callGroqWithHistory() — a Groq-only function —
+  // whenever history existed, silently ignoring AI_PROVIDER. Now it always goes
+  // through callAI(), so it actually respects whichever provider is configured,
+  // with or without history.
   return callAI(
     message,
     systemPrompt,
     {
       temperature: 0.4,
-      maxTokens: 500,
+      maxTokens: 600,
+      history,
     }
   );
 };
