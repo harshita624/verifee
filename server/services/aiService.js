@@ -75,7 +75,6 @@ async function callGroq(prompt, systemPrompt, options = {}) {
     });
   }
 
-  // FIX: history now flows through here too, so chat() no longer needs a separate Groq-only path
   if (options.history && options.history.length > 0) {
     messages.push(...options.history.slice(-10));
   }
@@ -107,7 +106,6 @@ async function callGroq(prompt, systemPrompt, options = {}) {
   if (!res.ok) {
     const errorText = await res.text();
 
-    // FIX: this was captured but never logged before, unlike every other provider function
     console.error("Groq API error:", {
       status: res.status,
       response: errorText
@@ -131,7 +129,6 @@ async function callGroq(prompt, systemPrompt, options = {}) {
       );
     }
 
-    // FIX: was a single hardcoded string before, ignoring getAIErrorMessage's other status cases (400/403/408/5xx)
     throw new Error(getAIErrorMessage(res.status));
   }
 
@@ -145,7 +142,6 @@ async function callGroq(prompt, systemPrompt, options = {}) {
     );
   }
 
-  // FIX: added .trim() for consistency with every other provider function
   return content.trim();
 }
 
@@ -168,7 +164,6 @@ async function callOpenAI(prompt, systemPrompt, options = {}) {
     });
   }
 
-  // FIX: OpenAI can now carry conversation history too
   if (options.history && options.history.length > 0) {
     messages.push(...options.history.slice(-10));
   }
@@ -241,10 +236,6 @@ async function callGemini(prompt, systemPrompt, options = {}) {
 
   const model = options.model || "gemini-1.5-flash";
 
-  // FIX: Gemini can now carry conversation history too, folded into the prompt
-  // as a transcript (kept consistent with this file's existing single-fullPrompt
-  // approach for Gemini, rather than switching to Gemini's native multi-turn
-  // `contents` array, which would be a bigger structural change).
   let historyText = "";
   if (options.history && options.history.length > 0) {
     historyText =
@@ -330,7 +321,6 @@ async function callOllama(prompt, systemPrompt, options = {}) {
     });
   }
 
-  // FIX: Ollama can now carry conversation history too
   if (options.history && options.history.length > 0) {
     messages.push(...options.history.slice(-10));
   }
@@ -438,6 +428,71 @@ async function callAI(
 // ROBUST JSON PARSER
 // ============================================================
 
+// FIX: new helper — when the AI response is a truncated JSON array (cut off
+// mid-element because it hit maxTokens), this walks the string tracking
+// brace depth — skipping over braces that appear inside quoted strings —
+// and finds the last position where a top-level array element was fully
+// closed. It slices there, closes the array, and tries to parse that
+// instead of giving up on the whole response.
+function attemptArrayRepair(jsonString) {
+  const trimmed = jsonString.trim();
+  if (!trimmed.startsWith("[")) {
+    return null;
+  }
+
+  let depth = 0;
+  let lastCompleteIndex = -1;
+  let inString = false;
+  let escapeNext = false;
+
+  for (let i = 0; i < trimmed.length; i++) {
+    const char = trimmed[i];
+
+    if (escapeNext) {
+      escapeNext = false;
+      continue;
+    }
+
+    if (char === "\\") {
+      escapeNext = true;
+      continue;
+    }
+
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+
+    if (inString) {
+      continue;
+    }
+
+    if (char === "{") {
+      depth++;
+    }
+
+    if (char === "}") {
+      depth--;
+      if (depth === 0) {
+        lastCompleteIndex = i;
+      }
+    }
+  }
+
+  if (lastCompleteIndex === -1) {
+    return null;
+  }
+
+  const repaired = trimmed.slice(0, lastCompleteIndex + 1) + "]";
+
+  try {
+    const parsed = JSON.parse(repaired);
+    return Array.isArray(parsed) && parsed.length > 0 ? parsed : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 function parseJSON(raw) {
   if (raw && typeof raw === "object") {
     return raw;
@@ -498,6 +553,19 @@ function parseJSON(raw) {
   const end = Math.max(objectEnd, arrayEnd);
 
   if (end < start) {
+    // FIX: previously threw immediately here. Now try the array-repair
+    // path first — this is exactly the "cut off with no closing bracket
+    // at all" case.
+    const repaired = attemptArrayRepair(cleaned.slice(start));
+    if (repaired) {
+      console.warn(
+        "AI response was truncated; recovered",
+        repaired.length,
+        "complete item(s) instead of failing the request."
+      );
+      return repaired;
+    }
+
     console.error(
       "Incomplete JSON response:",
       cleaned.slice(0, 500)
@@ -513,6 +581,20 @@ function parseJSON(raw) {
   try {
     return JSON.parse(jsonString);
   } catch (error) {
+    // FIX: previously threw immediately here. Now try the array-repair
+    // path first — this covers the case in the logs, where a closing `]`
+    // exists somewhere in the noise but the array itself is still broken
+    // partway through (e.g. an unterminated string mid-object).
+    const repaired = attemptArrayRepair(jsonString);
+    if (repaired) {
+      console.warn(
+        "AI response had malformed JSON; recovered",
+        repaired.length,
+        "complete item(s) instead of failing the request."
+      );
+      return repaired;
+    }
+
     console.error(
       "Invalid JSON returned by AI:",
       jsonString.slice(0, 1000)
@@ -766,10 +848,6 @@ Use specific INR amounts when appropriate.
 Keep responses under 120 words unless the user asks for detail.
 `;
 
-  // FIX: this used to branch to callGroqWithHistory() — a Groq-only function —
-  // whenever history existed, silently ignoring AI_PROVIDER. Now it always goes
-  // through callAI(), so it actually respects whichever provider is configured,
-  // with or without history.
   return callAI(
     message,
     systemPrompt,
