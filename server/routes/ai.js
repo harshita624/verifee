@@ -60,7 +60,7 @@ Return ONLY this JSON array (no other text):
     // Timeouts are now retried too (see fetchWithRetry in aiService.js),
     // so a single slow response no longer kills the whole search.
     const raw = await aiService.callAIRaw(prompt, system, {
-      maxTokens: 1800,
+      maxTokens: 3000,
       timeoutMs: 30000,
     });
     const markets = aiService.parseJSON(raw);

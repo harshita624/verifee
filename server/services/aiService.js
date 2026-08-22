@@ -3,6 +3,13 @@ require("dotenv").config();
 const AI_PROVIDER = (process.env.AI_PROVIDER || "groq").toLowerCase();
 
 const GROQ_KEY = process.env.GROQ_API_KEY;
+// FIX: llama-3.3-70b-versatile was deprecated by Groq (announced June 17,
+// 2026, fully decommissioned as of August 2026) — that's why it stopped
+// working. Groq's own recommended replacement is openai/gpt-oss-120b,
+// which is what's set as default here. The real bug wasn't the model
+// choice, it was that gpt-oss models are REASONING models and need
+// reasoning_effort explicitly set low (see callGroq below) or they burn
+// their whole token budget thinking instead of writing the JSON answer.
 const GROQ_MODEL =
   process.env.GROQ_MODEL || "openai/gpt-oss-120b";
 
@@ -69,12 +76,8 @@ async function fetchWithRetry(url, fetchOptions, { retries = 2, baseDelayMs = 80
         const isTimeout = err.name === "AbortError";
         lastError = err;
 
-        // FIX: timeouts used to throw immediately with no retry, even though
-        // a slow response is often just a transient blip. Now they're treated
-        // like any other retryable failure, and only give up on the final
-        // attempt. This was the root cause of the "continuous errors" on
-        // markets-search — one slow generation used to kill the search
-        // permanently with no second chance.
+        // FIX: timeouts are now retried like any other transient failure
+        // instead of failing instantly with zero retries.
         if (attempt === retries) {
           if (isTimeout) {
             console.error(`AI request to ${url} timed out after ${timeoutMs}ms — no attempts left.`);
@@ -153,6 +156,16 @@ function getAIErrorMessage(status) {
   }
 }
 
+// FIX: models known to be Groq "reasoning" models that need reasoning_effort
+// explicitly capped, or they can burn their entire max_tokens budget on
+// hidden reasoning and return empty content. Add to this list if you switch
+// models later and see the same "did not return a usable response" error.
+const REASONING_MODEL_PATTERNS = ["gpt-oss", "qwen3", "deepseek-r1", "qwq"];
+
+function isReasoningModel(model) {
+  return REASONING_MODEL_PATTERNS.some((p) => model.includes(p));
+}
+
 async function callGroq(prompt, systemPrompt, options = {}) {
   if (!GROQ_KEY) {
     throw new Error("GROQ_API_KEY not set in .env");
@@ -176,7 +189,26 @@ async function callGroq(prompt, systemPrompt, options = {}) {
     content: prompt
   });
 
+  const model = options.model || GROQ_MODEL;
   const maxTokens = options.maxTokens || 1000;
+
+  const body = {
+    model,
+    messages,
+    temperature: options.temperature ?? 0.2,
+    max_tokens: maxTokens,
+  };
+
+  // FIX: this was the actual root cause of every markets-search request
+  // failing. gpt-oss (and other reasoning models on Groq) spend part of
+  // max_tokens on hidden internal reasoning before writing the real answer.
+  // Without capping that, the whole token budget can get consumed by
+  // reasoning and the model hits the limit before emitting any JSON —
+  // content comes back empty on every call, which is exactly what your
+  // logs showed (100% failure, not intermittent).
+  if (isReasoningModel(model)) {
+    body.reasoning_effort = "low";
+  }
 
   const res = await fetchWithRetry(
     "https://api.groq.com/openai/v1/chat/completions",
@@ -186,12 +218,7 @@ async function callGroq(prompt, systemPrompt, options = {}) {
         "Content-Type": "application/json",
         Authorization: `Bearer ${GROQ_KEY}`
       },
-      body: JSON.stringify({
-        model: options.model || GROQ_MODEL,
-        messages,
-        temperature: options.temperature ?? 0.2,
-        max_tokens: maxTokens
-      })
+      body: JSON.stringify(body)
     },
     { timeoutMs: options.timeoutMs }
   );
@@ -227,9 +254,19 @@ async function callGroq(prompt, systemPrompt, options = {}) {
 
   const data = await res.json();
 
-  const content = data.choices?.[0]?.message?.content;
+  const choice = data.choices?.[0];
+  const content = choice?.message?.content;
 
   if (!content || !content.trim()) {
+    // FIX: log WHY content was empty (finish_reason especially) instead of
+    // just the generic message, so future failures are diagnosable from
+    // logs instead of guesswork.
+    console.error("Groq returned no usable content.", {
+      finish_reason: choice?.finish_reason,
+      model,
+      maxTokens,
+      reasoningEffort: body.reasoning_effort || "n/a",
+    });
     throw new Error(
       "The AI service did not return a usable response. Please try again."
     );
@@ -1216,11 +1253,9 @@ exports.analyzeImageWithPrompt = async (
   return parseJSON(content);
 };
 
-// FIX: static fallback list used by /markets-search when the AI call fails
-// after retries — so a slow/unavailable AI provider never leaves the user
-// with a blank error screen on what's essentially a "browse known markets"
-// page. This MUST be exported below (exports.FALLBACK_MARKETS) — a missing
-// export here is exactly what caused the earlier server crash.
+// Static fallback list used by /markets-search when the AI call fails
+// after retries, so a slow/unavailable AI provider never leaves the user
+// with a blank error screen.
 const FALLBACK_MARKETS = [
   {
     id: "chandni-chowk", name: "Chandni Chowk", city: "Delhi", state: "Delhi",
