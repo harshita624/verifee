@@ -18,9 +18,26 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 // ─────────────────────────────────────────────────────────────
+// Global crash safety net
+// ─────────────────────────────────────────────────────────────
+// FIX: without this, ANY unhandled promise rejection anywhere in the app
+// (e.g. a missing null-check, a typo like an undefined export being
+// .filter()'d, a third-party lib throwing async) takes down the ENTIRE
+// Node process and every user's request with it — this is what happened
+// with the FALLBACK_MARKETS crash. Now it logs instead of crashing, so one
+// bad request degrades gracefully instead of causing a full outage.
+process.on("unhandledRejection", (reason) => {
+  console.error("UNHANDLED REJECTION:", reason);
+});
+
+process.on("uncaughtException", (err) => {
+  console.error("UNCAUGHT EXCEPTION:", err);
+});
+
+// ─────────────────────────────────────────────────────────────
 // Trust proxy
 // ─────────────────────────────────────────────────────────────
-// FIX: Render sits in front of your app as a reverse proxy and adds an
+// Render sits in front of your app as a reverse proxy and adds an
 // X-Forwarded-For header. Express doesn't trust that header by default,
 // so express-rate-limit refused to use it for identifying clients — this
 // is exactly the ERR_ERL_UNEXPECTED_X_FORWARDED_FOR error you saw.
@@ -41,23 +58,28 @@ const allowedOrigins = [
   "http://localhost:5173",
 ];
 
-app.use(
-  cors({
-    origin: function (origin, callback) {
-      if (!origin) return callback(null, true);
+const corsOptions = {
+  origin: function (origin, callback) {
+    if (!origin) return callback(null, true);
 
-      if (allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
 
-      console.log("Blocked CORS origin:", origin);
-      return callback(new Error("Not allowed by CORS"));
-    },
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  })
-);
+    console.log("Blocked CORS origin:", origin);
+    return callback(new Error("Not allowed by CORS"));
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+};
+
+app.use(cors(corsOptions));
+
+// FIX: explicit preflight handler as a safety net, independent of where
+// other middleware sits in the chain.
+app.options("*", cors(corsOptions));
+
 // ─────────────────────────────────────────────────────────────
 // Security
 // ─────────────────────────────────────────────────────────────

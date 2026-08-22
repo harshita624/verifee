@@ -12,6 +12,7 @@ router.post("/chat",              aiController.chat);
 router.get( "/provider",          aiController.getProviderInfo);
 router.post("/recognize-product", protect, aiController.recognizeProduct);
 router.post("/parse-receipt",     protect, aiController.parseReceipt);
+
 router.post("/markets-search", async (req, res) => {
   try {
     const { query, city, limit = 8 } = req.body;
@@ -24,7 +25,7 @@ Include only REAL, well-known markets. Be accurate about locations and products.
     const queryContext = query ? `matching or related to "${query}"` : "popular with tourists and locals";
 
     // FIX: capped at 6 to keep generation fast enough to reliably finish
-    // inside the timeout, even under load. The UI already handles fewer cards fine.
+    // inside the timeout, even under load.
     const safeLimit = Math.min(Number(limit) || 6, 6);
 
     const prompt = `List ${safeLimit} real Indian markets ${cityContext} that are ${queryContext}.
@@ -54,11 +55,10 @@ Return ONLY this JSON array (no other text):
   }
 ]`;
 
-    // FIX: bumped timeout for this endpoint specifically (9-item structured
-    // JSON genuinely needs more than the global 15s default) and trimmed
-    // maxTokens to match the smaller limit — both reduce the chance of
-    // hitting the timeout in the first place, on top of timeouts now being
-    // retried (see aiService.js fetchWithRetry fix).
+    // FIX: bumped timeout for this endpoint (structured 6-item JSON needs
+    // more than the global 15s default) and trimmed maxTokens to match.
+    // Timeouts are now retried too (see fetchWithRetry in aiService.js),
+    // so a single slow response no longer kills the whole search.
     const raw = await aiService.callAIRaw(prompt, system, {
       maxTokens: 1800,
       timeoutMs: 30000,
@@ -73,25 +73,41 @@ Return ONLY this JSON array (no other text):
   } catch (err) {
     console.error("markets-search:", err.message);
 
-    // FIX: instead of surfacing a hard error to the user for what is
-    // essentially a "browse known markets" page, fall back to a small
-    // curated static list (filtered by city if one was given) so the page
-    // always shows *something* useful instead of an error card.
-    const { city } = req.body;
-    const fallback = city
-      ? aiService.FALLBACK_MARKETS.filter(
-          (m) => m.city.toLowerCase() === String(city).toLowerCase()
-        )
-      : aiService.FALLBACK_MARKETS;
+    // FIX: wrapped in its own try/catch. A bug in the fallback path itself
+    // must never be allowed to throw inside an async handler uncaught —
+    // that becomes an unhandled rejection and kills the ENTIRE Node
+    // process, which is exactly what happened when FALLBACK_MARKETS was
+    // undefined and .filter() threw here with nothing left to catch it.
+    try {
+      const { city } = req.body;
+      const allFallbacks = Array.isArray(aiService.FALLBACK_MARKETS)
+        ? aiService.FALLBACK_MARKETS
+        : [];
 
-    const data = fallback.length > 0 ? fallback : aiService.FALLBACK_MARKETS;
+      const filtered = city
+        ? allFallbacks.filter(
+            (m) => m.city?.toLowerCase() === String(city).toLowerCase()
+          )
+        : allFallbacks;
 
-    res.json({
-      success: true,
-      data,
-      count: data.length,
-      degraded: true, // lets the frontend show a subtle "showing cached results" note if you want
-    });
+      const data = filtered.length > 0 ? filtered : allFallbacks;
+
+      return res.json({
+        success: true,
+        data,
+        count: data.length,
+        degraded: true,
+      });
+    } catch (fallbackErr) {
+      // FIX: absolute last resort — if even the fallback logic fails,
+      // return a real HTTP error response instead of letting anything
+      // throw uncaught out of this handler.
+      console.error("markets-search fallback also failed:", fallbackErr.message);
+      return res.status(500).json({
+        success: false,
+        message: "Unable to load markets right now. Please try again.",
+      });
+    }
   }
 });
 
@@ -112,7 +128,7 @@ Return ONLY this JSON array:
   }
 ]`;
 
-    const raw    = await aiService.callAIRaw(prompt, system, { maxTokens: 600 });
+    const raw    = await aiService.callAIRaw(prompt, system, { maxTokens: 600, timeoutMs: 25000 });
     const places = aiService.parseJSON(raw);
 
     if (!Array.isArray(places) || places.length === 0) {
@@ -159,7 +175,7 @@ Return exactly this JSON:
   "generalTips": ["<tip1 for ${city||"India"}>","<tip2>","<tip3>"]
 }`;
 
-    const raw    = await aiService.callAIRaw(prompt, system, { maxTokens: 3000 });
+    const raw    = await aiService.callAIRaw(prompt, system, { maxTokens: 3000, timeoutMs: 30000 });
     const result = aiService.parseJSON(raw, {
       requiredFields: ["targetPrice", "openingOffer", "walkAwayPrice", "steps"],
     });
@@ -200,7 +216,7 @@ Return JSON:
   "nextMove": "<what if this fails>"
 }`;
 
-    const raw    = await aiService.callAIRaw(prompt, system, { maxTokens: 700 });
+    const raw    = await aiService.callAIRaw(prompt, system, { maxTokens: 700, timeoutMs: 20000 });
     const result = aiService.parseJSON(raw, {
       requiredFields: ["say", "strategy"],
     });

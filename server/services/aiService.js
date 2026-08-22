@@ -72,9 +72,9 @@ async function fetchWithRetry(url, fetchOptions, { retries = 2, baseDelayMs = 80
         // FIX: timeouts used to throw immediately with no retry, even though
         // a slow response is often just a transient blip. Now they're treated
         // like any other retryable failure, and only give up on the final
-        // attempt — this is what was causing the "continuous errors" the
-        // user is seeing, since the very first slow call killed the search
-        // with no second chance.
+        // attempt. This was the root cause of the "continuous errors" on
+        // markets-search — one slow generation used to kill the search
+        // permanently with no second chance.
         if (attempt === retries) {
           if (isTimeout) {
             console.error(`AI request to ${url} timed out after ${timeoutMs}ms — no attempts left.`);
@@ -1215,6 +1215,76 @@ exports.analyzeImageWithPrompt = async (
 
   return parseJSON(content);
 };
+
+// FIX: static fallback list used by /markets-search when the AI call fails
+// after retries — so a slow/unavailable AI provider never leaves the user
+// with a blank error screen on what's essentially a "browse known markets"
+// page. This MUST be exported below (exports.FALLBACK_MARKETS) — a missing
+// export here is exactly what caused the earlier server crash.
+const FALLBACK_MARKETS = [
+  {
+    id: "chandni-chowk", name: "Chandni Chowk", city: "Delhi", state: "Delhi",
+    category: "Mixed",
+    description: "One of Delhi's oldest and busiest markets, known for spices, jewellery, textiles, and street food. A must-visit for first-time tourists.",
+    trustScore: 72, fairPriceScore: 65, touristFriendlyScore: 68,
+    avgRating: 4.3, totalReviews: 5200, negotiationSuccessRate: 70,
+    peakHours: ["11:00 AM", "6:00 PM"], languages: ["Hindi", "Punjabi", "English"],
+    popularProducts: ["Spices", "Sarees", "Jewellery", "Street food"],
+    openNow: true, openingHours: "10:00 AM – 8:00 PM", isVerified: true, color: "#f59e0b",
+  },
+  {
+    id: "johari-bazaar", name: "Johari Bazaar", city: "Jaipur", state: "Rajasthan",
+    category: "Jewellery",
+    description: "Jaipur's famous jewellery market specialising in gemstones, gold, and traditional Rajasthani jewellery.",
+    trustScore: 75, fairPriceScore: 60, touristFriendlyScore: 65,
+    avgRating: 4.4, totalReviews: 3100, negotiationSuccessRate: 62,
+    peakHours: ["10:30 AM", "7:00 PM"], languages: ["Hindi", "Rajasthani", "English"],
+    popularProducts: ["Gemstones", "Gold jewellery", "Kundan sets"],
+    openNow: true, openingHours: "10:00 AM – 8:30 PM", isVerified: true, color: "#8b5cf6",
+  },
+  {
+    id: "crawford-market", name: "Crawford Market", city: "Mumbai", state: "Maharashtra",
+    category: "Mixed",
+    description: "A historic Mumbai market known for fresh produce, spices, pets, and imported goods, housed in a colonial-era building.",
+    trustScore: 70, fairPriceScore: 63, touristFriendlyScore: 66,
+    avgRating: 4.2, totalReviews: 2800, negotiationSuccessRate: 58,
+    peakHours: ["9:00 AM", "5:00 PM"], languages: ["Hindi", "Marathi", "English"],
+    popularProducts: ["Fruits", "Spices", "Dry fruits", "Imported chocolates"],
+    openNow: true, openingHours: "11:00 AM – 8:00 PM", isVerified: true, color: "#ec4899",
+  },
+  {
+    id: "laad-bazaar", name: "Laad Bazaar", city: "Hyderabad", state: "Telangana",
+    category: "Handicrafts",
+    description: "Famous for lac bangles, pearls, and traditional Hyderabadi jewellery near the Charminar.",
+    trustScore: 71, fairPriceScore: 61, touristFriendlyScore: 64,
+    avgRating: 4.3, totalReviews: 2200, negotiationSuccessRate: 66,
+    peakHours: ["11:00 AM", "8:00 PM"], languages: ["Hindi", "Telugu", "Urdu", "English"],
+    popularProducts: ["Lac bangles", "Pearls", "Bidri ware"],
+    openNow: true, openingHours: "10:30 AM – 9:00 PM", isVerified: true, color: "#dc2626",
+  },
+  {
+    id: "commercial-street", name: "Commercial Street", city: "Bangalore", state: "Karnataka",
+    category: "Textiles",
+    description: "A popular shopping stretch for clothing, footwear, and accessories at negotiable prices.",
+    trustScore: 74, fairPriceScore: 68, touristFriendlyScore: 72,
+    avgRating: 4.1, totalReviews: 1800, negotiationSuccessRate: 60,
+    peakHours: ["11:00 AM", "7:00 PM"], languages: ["Kannada", "Hindi", "English"],
+    popularProducts: ["Clothing", "Footwear", "Bags"],
+    openNow: true, openingHours: "10:30 AM – 9:00 PM", isVerified: true, color: "#0ea5e9",
+  },
+  {
+    id: "sarojini-nagar", name: "Sarojini Nagar", city: "Delhi", state: "Delhi",
+    category: "Textiles",
+    description: "Delhi's go-to budget shopping market for clothing, export surplus, and accessories.",
+    trustScore: 73, fairPriceScore: 70, touristFriendlyScore: 75,
+    avgRating: 4.2, totalReviews: 4100, negotiationSuccessRate: 74,
+    peakHours: ["12:00 PM", "7:00 PM"], languages: ["Hindi", "English"],
+    popularProducts: ["Clothing", "Footwear", "Accessories"],
+    openNow: true, openingHours: "10:00 AM – 8:30 PM", isVerified: true, color: "#16a34a",
+  },
+];
+
+exports.FALLBACK_MARKETS = FALLBACK_MARKETS;
 
 exports.getProviderInfo = () => ({
   provider: AI_PROVIDER,
