@@ -1,6 +1,6 @@
 const express      = require("express");
 const aiController = require("../controllers/aiController");
-const aiService    = require("../services/aiService");
+const aiService     = require("../services/aiService");
 const { protect }  = require("../middleware/auth");
 
 const router = express.Router();
@@ -16,10 +16,6 @@ router.post("/parse-receipt",     protect, aiController.parseReceipt);
 router.post("/markets-search", async (req, res) => {
   try {
     const { query, city, limit = 8 } = req.body;
-
-    if (!query && !city) {
-      return res.status(400).json({ success: false, message: "query or city required" });
-    }
 
     const system = `You are a database of real Indian markets and bazaars. 
 Return ONLY a valid JSON array. No markdown, no explanation, no code fences.

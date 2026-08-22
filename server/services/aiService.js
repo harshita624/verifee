@@ -16,6 +16,29 @@ const OLLAMA_URL =
 const OLLAMA_MODEL =
   process.env.OLLAMA_MODEL || "llama3.2";
 
+const MAX_CONCURRENT_AI_REQUESTS = Number(process.env.MAX_CONCURRENT_AI_REQUESTS) || 2;
+let activeAIRequests = 0;
+const aiRequestQueue = [];
+
+function acquireAISlot() {
+  if (activeAIRequests < MAX_CONCURRENT_AI_REQUESTS) {
+    activeAIRequests++;
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    aiRequestQueue.push(resolve);
+  });
+}
+
+function releaseAISlot() {
+  activeAIRequests--;
+  const next = aiRequestQueue.shift();
+  if (next) {
+    activeAIRequests++;
+    next();
+  }
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -28,63 +51,69 @@ function backoffDelay(attempt, baseDelayMs) {
 const RETRYABLE_STATUSES = new Set([429, 502, 503, 504]);
 
 async function fetchWithRetry(url, fetchOptions, { retries = 2, baseDelayMs = 800, timeoutMs = 15000 } = {}) {
-  let lastError;
+  await acquireAISlot();
 
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    let res;
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    let lastError;
 
-    try {
-      res = await fetch(url, { ...fetchOptions, signal: controller.signal });
-    } catch (err) {
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      let res;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+      try {
+        res = await fetch(url, { ...fetchOptions, signal: controller.signal });
+      } catch (err) {
+        clearTimeout(timeoutId);
+
+        const isTimeout = err.name === "AbortError";
+
+        if (isTimeout) {
+          console.error(`AI request to ${url} timed out after ${timeoutMs}ms — not retrying.`);
+          throw new Error("The AI service took too long to respond. Please try again.");
+        }
+
+        lastError = err;
+        console.warn(
+          `AI request to ${url} failed with a network error, ` +
+          `${attempt === retries ? "no attempts left" : `retrying (attempt ${attempt + 1}/${retries})`}: ${err.message}`
+        );
+
+        if (attempt === retries) {
+          throw new Error("The AI service is temporarily unavailable. Please try again later.");
+        }
+
+        await sleep(backoffDelay(attempt, baseDelayMs));
+        continue;
+      }
+
       clearTimeout(timeoutId);
 
-      const isTimeout = err.name === "AbortError";
-
-      if (isTimeout) {
-        console.error(`AI request to ${url} timed out after ${timeoutMs}ms — not retrying.`);
-        throw new Error("The AI service took too long to respond. Please try again.");
+      if (res.ok || !RETRYABLE_STATUSES.has(res.status) || attempt === retries) {
+        return res;
       }
 
-      lastError = err;
+      let delay = backoffDelay(attempt, baseDelayMs);
+      const retryAfterHeader = res.headers.get("retry-after");
+      if (retryAfterHeader) {
+        const retryAfterMs = Number(retryAfterHeader) * 1000;
+        if (!Number.isNaN(retryAfterMs) && retryAfterMs > 0) {
+          delay = Math.max(delay, retryAfterMs);
+        }
+      }
+
       console.warn(
-        `AI request to ${url} failed with a network error, ` +
-        `${attempt === retries ? "no attempts left" : `retrying (attempt ${attempt + 1}/${retries})`}: ${err.message}`
+        `AI request to ${url} got status ${res.status}, retrying in ${Math.round(delay)}ms ` +
+        `(attempt ${attempt + 1}/${retries})`
       );
 
-      if (attempt === retries) {
-        throw new Error("The AI service is temporarily unavailable. Please try again later.");
-      }
-
-      await sleep(backoffDelay(attempt, baseDelayMs));
-      continue;
+      await sleep(delay);
     }
 
-    clearTimeout(timeoutId);
-
-    if (res.ok || !RETRYABLE_STATUSES.has(res.status) || attempt === retries) {
-      return res;
-    }
-
-    let delay = backoffDelay(attempt, baseDelayMs);
-    const retryAfterHeader = res.headers.get("retry-after");
-    if (retryAfterHeader) {
-      const retryAfterMs = Number(retryAfterHeader) * 1000;
-      if (!Number.isNaN(retryAfterMs) && retryAfterMs > 0) {
-        delay = Math.max(delay, retryAfterMs);
-      }
-    }
-
-    console.warn(
-      `AI request to ${url} got status ${res.status}, retrying in ${Math.round(delay)}ms ` +
-      `(attempt ${attempt + 1}/${retries})`
-    );
-
-    await sleep(delay);
+    throw lastError || new Error("Request failed after retries");
+  } finally {
+    releaseAISlot();
   }
-
-  throw lastError || new Error("Request failed after retries");
 }
 
 function getAIErrorMessage(status) {
