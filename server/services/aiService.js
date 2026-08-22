@@ -22,19 +22,8 @@ const OLLAMA_MODEL =
 
 
 // ============================================================
-// FIX — RETRY-WITH-BACKOFF WRAPPER
+// RETRY-WITH-BACKOFF WRAPPER
 // ============================================================
-// This is the actual fix for "one feature runs, then the very next one
-// fails". Every provider call below used a bare `fetch()` that threw
-// immediately on ANY non-ok response — including 429 (rate limited) and
-// 502/503/504 (provider momentarily overloaded), which are exactly the
-// kind of errors that go away if you just wait a second and try again.
-//
-// fetchWithRetry() replaces the bare fetch() in every provider function.
-// On a retryable status it waits (honoring the provider's Retry-After
-// header when present) and tries again, up to `retries` extra attempts,
-// before handing back the final response for the existing error-mapping
-// code below to handle exactly as it did before.
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -56,7 +45,6 @@ async function fetchWithRetry(url, fetchOptions, { retries = 2, baseDelayMs = 80
     try {
       res = await fetch(url, fetchOptions);
     } catch (networkErr) {
-      // DNS failure, connection reset, timeout, etc. — also worth a retry.
       lastNetworkError = networkErr;
       if (attempt === retries) throw networkErr;
       await sleep(backoffDelay(attempt, baseDelayMs));
@@ -84,7 +72,6 @@ async function fetchWithRetry(url, fetchOptions, { retries = 2, baseDelayMs = 80
     await sleep(delay);
   }
 
-  // Unreachable in practice, but keeps control flow explicit.
   throw lastNetworkError || new Error("Request failed after retries");
 }
 
@@ -154,7 +141,6 @@ async function callGroq(prompt, systemPrompt, options = {}) {
 
   const maxTokens = options.maxTokens || 1000;
 
-  // FIX: fetch -> fetchWithRetry
   const res = await fetchWithRetry(
     "https://api.groq.com/openai/v1/chat/completions",
     {
@@ -255,7 +241,6 @@ async function callOpenAI(prompt, systemPrompt, options = {}) {
     };
   }
 
-  // FIX: fetch -> fetchWithRetry
   const res = await fetchWithRetry(
     "https://api.openai.com/v1/chat/completions",
     {
@@ -326,7 +311,6 @@ async function callGemini(prompt, systemPrompt, options = {}) {
     `https://generativelanguage.googleapis.com/v1beta/models/${model}` +
     `:generateContent?key=${GEMINI_KEY}`;
 
-  // FIX: fetch -> fetchWithRetry
   const res = await fetchWithRetry(url, {
     method: "POST",
 
@@ -401,7 +385,6 @@ async function callOllama(prompt, systemPrompt, options = {}) {
     content: prompt,
   });
 
-  // FIX: fetch -> fetchWithRetry
   const res = await fetchWithRetry(`${OLLAMA_URL}/api/chat`, {
     method: "POST",
 
@@ -500,12 +483,9 @@ async function callAI(
 // ROBUST JSON PARSER
 // ============================================================
 
-// FIX: new helper — when the AI response is a truncated JSON array (cut off
-// mid-element because it hit maxTokens), this walks the string tracking
-// brace depth — skipping over braces that appear inside quoted strings —
-// and finds the last position where a top-level array element was fully
-// closed. It slices there, closes the array, and tries to parse that
-// instead of giving up on the whole response.
+// Repairs a truncated JSON ARRAY: walks the string tracking brace depth
+// (skipping braces inside quoted strings), finds the last position where a
+// top-level array element was fully closed, slices there, and closes the array.
 function attemptArrayRepair(jsonString) {
   const trimmed = jsonString.trim();
   if (!trimmed.startsWith("[")) {
@@ -563,6 +543,84 @@ function attemptArrayRepair(jsonString) {
   } catch (_) {
     return null;
   }
+}
+
+// NEW — repairs a truncated JSON OBJECT (this is the actual gap: getFairPrice,
+// detectScam, translate, and parseReceipt all return single objects, not
+// arrays, so attemptArrayRepair could never have helped them). Walks the
+// string tracking string/escape state and top-level comma positions, finds
+// the last point where a complete "key": value field ended, cuts there, and
+// closes the object — dropping only the one field that got cut off mid-write.
+function attemptObjectRepair(jsonString) {
+  const trimmed = jsonString.trim();
+  if (!trimmed.startsWith("{")) {
+    return null;
+  }
+
+  let depth = 0;
+  let inString = false;
+  let escapeNext = false;
+  let lastSafeCutIndex = -1; // position of a comma that closed a complete top-level field
+
+  for (let i = 0; i < trimmed.length; i++) {
+    const char = trimmed[i];
+
+    if (escapeNext) {
+      escapeNext = false;
+      continue;
+    }
+
+    if (char === "\\") {
+      escapeNext = true;
+      continue;
+    }
+
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+
+    if (inString) {
+      continue;
+    }
+
+    if (char === "{" || char === "[") {
+      depth++;
+    }
+
+    if (char === "}" || char === "]") {
+      depth--;
+    }
+
+    if (char === "," && depth === 1) {
+      lastSafeCutIndex = i;
+    }
+  }
+
+  if (lastSafeCutIndex === -1) {
+    return null; // truncated before even one field finished — nothing to salvage
+  }
+
+  const repaired = trimmed.slice(0, lastSafeCutIndex) + "}";
+
+  try {
+    const parsed = JSON.parse(repaired);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+// Dispatches to whichever repair strategy matches the truncated shape.
+function attemptJSONRepair(jsonString) {
+  const trimmed = jsonString.trim();
+  if (trimmed.startsWith("[")) {
+    return attemptArrayRepair(trimmed);
+  }
+  if (trimmed.startsWith("{")) {
+    return attemptObjectRepair(trimmed);
+  }
+  return null;
 }
 
 function parseJSON(raw) {
@@ -625,15 +683,14 @@ function parseJSON(raw) {
   const end = Math.max(objectEnd, arrayEnd);
 
   if (end < start) {
-    // FIX: previously threw immediately here. Now try the array-repair
-    // path first — this is exactly the "cut off with no closing bracket
-    // at all" case.
-    const repaired = attemptArrayRepair(cleaned.slice(start));
+    // FIX: was attemptArrayRepair only — objects (getFairPrice, detectScam,
+    // translate, parseReceipt) could never be repaired here before.
+    const repaired = attemptJSONRepair(cleaned.slice(start));
     if (repaired) {
       console.warn(
-        "AI response was truncated; recovered",
-        repaired.length,
-        "complete item(s) instead of failing the request."
+        "AI response was truncated; recovered a partial",
+        Array.isArray(repaired) ? `array (${repaired.length} item(s))` : "object",
+        "instead of failing the request."
       );
       return repaired;
     }
@@ -653,16 +710,14 @@ function parseJSON(raw) {
   try {
     return JSON.parse(jsonString);
   } catch (error) {
-    // FIX: previously threw immediately here. Now try the array-repair
-    // path first — this covers the case in the logs, where a closing `]`
-    // exists somewhere in the noise but the array itself is still broken
-    // partway through (e.g. an unterminated string mid-object).
-    const repaired = attemptArrayRepair(jsonString);
+    // FIX: same widening here — object truncation with noise around it now
+    // gets a repair attempt too, not just arrays.
+    const repaired = attemptJSONRepair(jsonString);
     if (repaired) {
       console.warn(
-        "AI response had malformed JSON; recovered",
-        repaired.length,
-        "complete item(s) instead of failing the request."
+        "AI response had malformed JSON; recovered a partial",
+        Array.isArray(repaired) ? `array (${repaired.length} item(s))` : "object",
+        "instead of failing the request."
       );
       return repaired;
     }
@@ -750,11 +805,11 @@ Return exactly one JSON object with these fields:
   "bargainingStart": 0,
   "bargainingTarget": 0,
   "confidenceScore": 0,
-  "bestTimeToBuy": "string",
-  "aiRecommendation": "string",
-  "scamWarning": "string",
+  "bestTimeToBuy": "string, max 12 words",
+  "aiRecommendation": "string, max 25 words",
+  "scamWarning": "string, max 20 words",
   "trend": "Stable",
-  "seasonalNote": "string"
+  "seasonalNote": "string, max 15 words"
 }
 
 Rules:
@@ -762,14 +817,19 @@ Rules:
 - confidenceScore must be between 0 and 60.
 - touristPremium must be a percentage number.
 - trend must be Rising, Stable, or Falling.
+- Keep every string field within its stated word limit — brevity matters more than completeness here.
 - No extra fields.
 `;
 
+  // FIX: 1400 -> 2000. The truncations in the logs were all cut off mid-string
+  // inside these free-text fields; the per-field word caps above reduce how
+  // often this happens at all, and the higher ceiling gives real headroom
+  // for the rest.
   const raw = await callAI(
     prompt,
     PRICE_SYSTEM,
     {
-      maxTokens: 1400,
+      maxTokens: 2000,
       temperature: 0.1,
       json: true,
     }
@@ -945,7 +1005,6 @@ exports.recognizeProduct = async (
     );
   }
 
-  // FIX: fetch -> fetchWithRetry
   const res = await fetchWithRetry(
     "https://api.openai.com/v1/chat/completions",
     {
@@ -1103,7 +1162,6 @@ exports.analyzeImageWithPrompt = async (
     );
   }
 
-  // FIX: fetch -> fetchWithRetry
   const res = await fetchWithRetry(
     "https://api.openai.com/v1/chat/completions",
     {

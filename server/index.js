@@ -17,6 +17,18 @@ const scamReportRoutes = require("./routes/scamReports");
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+// ─────────────────────────────────────────────────────────────
+// Trust proxy
+// ─────────────────────────────────────────────────────────────
+// FIX: Render sits in front of your app as a reverse proxy and adds an
+// X-Forwarded-For header. Express doesn't trust that header by default,
+// so express-rate-limit refused to use it for identifying clients — this
+// is exactly the ERR_ERL_UNEXPECTED_X_FORWARDED_FOR error you saw.
+// `1` means "trust exactly one hop" (Render's proxy) — not `true`, which
+// would trust the entire forwarded chain and let a malicious client spoof
+// their own X-Forwarded-For to dodge rate limiting.
+app.set("trust proxy", 1);
+
 connectDB();
 
 // ─────────────────────────────────────────────────────────────
