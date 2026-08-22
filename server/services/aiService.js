@@ -67,21 +67,27 @@ async function fetchWithRetry(url, fetchOptions, { retries = 2, baseDelayMs = 80
         clearTimeout(timeoutId);
 
         const isTimeout = err.name === "AbortError";
-
-        if (isTimeout) {
-          console.error(`AI request to ${url} timed out after ${timeoutMs}ms — not retrying.`);
-          throw new Error("The AI service took too long to respond. Please try again.");
-        }
-
         lastError = err;
-        console.warn(
-          `AI request to ${url} failed with a network error, ` +
-          `${attempt === retries ? "no attempts left" : `retrying (attempt ${attempt + 1}/${retries})`}: ${err.message}`
-        );
 
+        // FIX: timeouts used to throw immediately with no retry, even though
+        // a slow response is often just a transient blip. Now they're treated
+        // like any other retryable failure, and only give up on the final
+        // attempt — this is what was causing the "continuous errors" the
+        // user is seeing, since the very first slow call killed the search
+        // with no second chance.
         if (attempt === retries) {
+          if (isTimeout) {
+            console.error(`AI request to ${url} timed out after ${timeoutMs}ms — no attempts left.`);
+            throw new Error("The AI service took too long to respond. Please try again.");
+          }
+          console.error(`AI request to ${url} failed with a network error, no attempts left: ${err.message}`);
           throw new Error("The AI service is temporarily unavailable. Please try again later.");
         }
+
+        console.warn(
+          `AI request to ${url} ${isTimeout ? "timed out" : "failed with a network error"}, ` +
+          `retrying (attempt ${attempt + 1}/${retries}): ${err.message}`
+        );
 
         await sleep(backoffDelay(attempt, baseDelayMs));
         continue;

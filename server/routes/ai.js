@@ -12,7 +12,6 @@ router.post("/chat",              aiController.chat);
 router.get( "/provider",          aiController.getProviderInfo);
 router.post("/recognize-product", protect, aiController.recognizeProduct);
 router.post("/parse-receipt",     protect, aiController.parseReceipt);
-
 router.post("/markets-search", async (req, res) => {
   try {
     const { query, city, limit = 8 } = req.body;
@@ -24,7 +23,11 @@ Include only REAL, well-known markets. Be accurate about locations and products.
     const cityContext = city ? `in or near ${city}` : "across major Indian cities";
     const queryContext = query ? `matching or related to "${query}"` : "popular with tourists and locals";
 
-    const prompt = `List ${limit} real Indian markets ${cityContext} that are ${queryContext}.
+    // FIX: capped at 6 to keep generation fast enough to reliably finish
+    // inside the timeout, even under load. The UI already handles fewer cards fine.
+    const safeLimit = Math.min(Number(limit) || 6, 6);
+
+    const prompt = `List ${safeLimit} real Indian markets ${cityContext} that are ${queryContext}.
 
 Return ONLY this JSON array (no other text):
 [
@@ -34,7 +37,7 @@ Return ONLY this JSON array (no other text):
     "city": "<city>",
     "state": "<Indian state>",
     "category": "<main category: Textiles|Jewellery|Handicrafts|Food|Electronics|Mixed|Vegetables|Antiques>",
-    "description": "<2-3 sentences: what is sold here, why tourists visit, any notable facts>",
+    "description": "<1-2 short sentences: what is sold here, why tourists visit>",
     "trustScore": <number 55-92>,
     "fairPriceScore": <number 50-88>,
     "touristFriendlyScore": <number 55-95>,
@@ -51,17 +54,44 @@ Return ONLY this JSON array (no other text):
   }
 ]`;
 
-    const raw     = await aiService.callAIRaw(prompt, system, { maxTokens: 2500 });
+    // FIX: bumped timeout for this endpoint specifically (9-item structured
+    // JSON genuinely needs more than the global 15s default) and trimmed
+    // maxTokens to match the smaller limit — both reduce the chance of
+    // hitting the timeout in the first place, on top of timeouts now being
+    // retried (see aiService.js fetchWithRetry fix).
+    const raw = await aiService.callAIRaw(prompt, system, {
+      maxTokens: 1800,
+      timeoutMs: 30000,
+    });
     const markets = aiService.parseJSON(raw);
 
     if (!Array.isArray(markets) || markets.length === 0) {
-      throw new Error("AI returned no markets. Please try again.");
+      throw new Error("AI returned no markets.");
     }
 
     res.json({ success: true, data: markets, count: markets.length });
   } catch (err) {
     console.error("markets-search:", err.message);
-    res.status(500).json({ success: false, message: err.message });
+
+    // FIX: instead of surfacing a hard error to the user for what is
+    // essentially a "browse known markets" page, fall back to a small
+    // curated static list (filtered by city if one was given) so the page
+    // always shows *something* useful instead of an error card.
+    const { city } = req.body;
+    const fallback = city
+      ? aiService.FALLBACK_MARKETS.filter(
+          (m) => m.city.toLowerCase() === String(city).toLowerCase()
+        )
+      : aiService.FALLBACK_MARKETS;
+
+    const data = fallback.length > 0 ? fallback : aiService.FALLBACK_MARKETS;
+
+    res.json({
+      success: true,
+      data,
+      count: data.length,
+      degraded: true, // lets the frontend show a subtle "showing cached results" note if you want
+    });
   }
 });
 
