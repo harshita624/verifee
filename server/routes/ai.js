@@ -5,7 +5,6 @@ const { protect }  = require("../middleware/auth");
 
 const router = express.Router();
 
-// Core AI endpoints
 router.post("/fair-price",        aiController.getFairPrice);
 router.post("/scam-check",        aiController.detectScam);
 router.post("/translate",         aiController.translate);
@@ -13,8 +12,6 @@ router.post("/chat",              aiController.chat);
 router.get( "/provider",          aiController.getProviderInfo);
 router.post("/recognize-product", protect, aiController.recognizeProduct);
 router.post("/parse-receipt",     protect, aiController.parseReceipt);
-
-// ── Markets search — fully AI-powered, no hardcoded data ─────────────────────
 
 router.post("/markets-search", async (req, res) => {
   try {
@@ -61,7 +58,9 @@ Return ONLY this JSON array (no other text):
     const raw     = await aiService.callAIRaw(prompt, system, { maxTokens: 2500 });
     const markets = aiService.parseJSON(raw);
 
-    if (!Array.isArray(markets)) throw new Error("AI returned non-array response");
+    if (!Array.isArray(markets) || markets.length === 0) {
+      throw new Error("AI returned no markets. Please try again.");
+    }
 
     res.json({ success: true, data: markets, count: markets.length });
   } catch (err) {
@@ -69,8 +68,6 @@ Return ONLY this JSON array (no other text):
     res.status(500).json({ success: false, message: err.message });
   }
 });
-
-// ── City places — returns popular markets/places for price checker & scam checker ──
 
 router.get("/city-places/:city", async (req, res) => {
   try {
@@ -92,7 +89,9 @@ Return ONLY this JSON array:
     const raw    = await aiService.callAIRaw(prompt, system, { maxTokens: 600 });
     const places = aiService.parseJSON(raw);
 
-    if (!Array.isArray(places)) throw new Error("Invalid response");
+    if (!Array.isArray(places) || places.length === 0) {
+      throw new Error("AI returned no places. Please try again.");
+    }
 
     res.json({ success: true, data: places });
   } catch (err) {
@@ -100,8 +99,6 @@ Return ONLY this JSON array:
     res.status(500).json({ success: false, message: err.message });
   }
 });
-
-// ── Bargain coach ─────────────────────────────────────────────────────────────
 
 router.post("/bargain-script", async (req, res) => {
   try {
@@ -136,15 +133,21 @@ Return exactly this JSON:
   "generalTips": ["<tip1 for ${city||"India"}>","<tip2>","<tip3>"]
 }`;
 
-    const raw    = await aiService.callAIRaw(prompt, system, { maxTokens: 1400 });
-    const result = aiService.parseJSON(raw);
+    const raw    = await aiService.callAIRaw(prompt, system, { maxTokens: 3000 });
+    const result = aiService.parseJSON(raw, {
+      requiredFields: ["targetPrice", "openingOffer", "walkAwayPrice", "steps"],
+    });
+
+    if (!Array.isArray(result.steps) || result.steps.length === 0) {
+      throw new Error("The AI service returned an incomplete script. Please try again.");
+    }
+
     res.json({ success: true, data: result });
   } catch (err) {
+    console.error("bargain-script:", err.message);
     res.status(500).json({ success: false, message: err.message });
   }
 });
-
-// ── Live bargain comeback ─────────────────────────────────────────────────────
 
 router.post("/bargain-reply", async (req, res) => {
   try {
@@ -171,15 +174,17 @@ Return JSON:
   "nextMove": "<what if this fails>"
 }`;
 
-    const raw    = await aiService.callAIRaw(prompt, system, { maxTokens: 400 });
-    const result = aiService.parseJSON(raw);
+    const raw    = await aiService.callAIRaw(prompt, system, { maxTokens: 700 });
+    const result = aiService.parseJSON(raw, {
+      requiredFields: ["say", "strategy"],
+    });
+
     res.json({ success: true, data: result });
   } catch (err) {
+    console.error("bargain-reply:", err.message);
     res.status(500).json({ success: false, message: err.message });
   }
 });
-
-// ── Receipt verifier ──────────────────────────────────────────────────────────
 
 router.post("/verify-receipt", async (req, res) => {
   try {
@@ -214,6 +219,7 @@ Return ONLY this JSON:
 
     res.json({ success: true, data: result });
   } catch (err) {
+    console.error("verify-receipt:", err.message);
     res.status(500).json({ success: false, message: err.message });
   }
 });

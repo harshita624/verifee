@@ -1,14 +1,10 @@
 require("dotenv").config();
 
-// ============================================================
-// CONFIGURATION
-// ============================================================
-
 const AI_PROVIDER = (process.env.AI_PROVIDER || "groq").toLowerCase();
 
 const GROQ_KEY = process.env.GROQ_API_KEY;
 const GROQ_MODEL =
-  process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
+  process.env.GROQ_MODEL || "openai/gpt-oss-120b";
 
 const OPENAI_KEY = process.env.OPENAI_API_KEY;
 
@@ -19,11 +15,6 @@ const OLLAMA_URL =
 
 const OLLAMA_MODEL =
   process.env.OLLAMA_MODEL || "llama3.2";
-
-
-// ============================================================
-// RETRY-WITH-BACKOFF WRAPPER
-// ============================================================
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -36,20 +27,41 @@ function backoffDelay(attempt, baseDelayMs) {
 
 const RETRYABLE_STATUSES = new Set([429, 502, 503, 504]);
 
-async function fetchWithRetry(url, fetchOptions, { retries = 2, baseDelayMs = 800 } = {}) {
-  let lastNetworkError;
+async function fetchWithRetry(url, fetchOptions, { retries = 2, baseDelayMs = 800, timeoutMs = 15000 } = {}) {
+  let lastError;
 
   for (let attempt = 0; attempt <= retries; attempt++) {
     let res;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
-      res = await fetch(url, fetchOptions);
-    } catch (networkErr) {
-      lastNetworkError = networkErr;
-      if (attempt === retries) throw networkErr;
+      res = await fetch(url, { ...fetchOptions, signal: controller.signal });
+    } catch (err) {
+      clearTimeout(timeoutId);
+
+      const isTimeout = err.name === "AbortError";
+
+      if (isTimeout) {
+        console.error(`AI request to ${url} timed out after ${timeoutMs}ms — not retrying.`);
+        throw new Error("The AI service took too long to respond. Please try again.");
+      }
+
+      lastError = err;
+      console.warn(
+        `AI request to ${url} failed with a network error, ` +
+        `${attempt === retries ? "no attempts left" : `retrying (attempt ${attempt + 1}/${retries})`}: ${err.message}`
+      );
+
+      if (attempt === retries) {
+        throw new Error("The AI service is temporarily unavailable. Please try again later.");
+      }
+
       await sleep(backoffDelay(attempt, baseDelayMs));
       continue;
     }
+
+    clearTimeout(timeoutId);
 
     if (res.ok || !RETRYABLE_STATUSES.has(res.status) || attempt === retries) {
       return res;
@@ -72,13 +84,8 @@ async function fetchWithRetry(url, fetchOptions, { retries = 2, baseDelayMs = 80
     await sleep(delay);
   }
 
-  throw lastNetworkError || new Error("Request failed after retries");
+  throw lastError || new Error("Request failed after retries");
 }
-
-
-// ============================================================
-// HELPER - USER FRIENDLY ERRORS
-// ============================================================
 
 function getAIErrorMessage(status) {
   switch (status) {
@@ -110,11 +117,6 @@ function getAIErrorMessage(status) {
       return "The AI service is temporarily unavailable. Please try again later.";
   }
 }
-
-
-// ============================================================
-// GROQ
-// ============================================================
 
 async function callGroq(prompt, systemPrompt, options = {}) {
   if (!GROQ_KEY) {
@@ -155,7 +157,8 @@ async function callGroq(prompt, systemPrompt, options = {}) {
         temperature: options.temperature ?? 0.2,
         max_tokens: maxTokens
       })
-    }
+    },
+    { timeoutMs: options.timeoutMs }
   );
 
   if (!res.ok) {
@@ -199,11 +202,6 @@ async function callGroq(prompt, systemPrompt, options = {}) {
 
   return content.trim();
 }
-
-
-// ============================================================
-// OPENAI
-// ============================================================
 
 async function callOpenAI(prompt, systemPrompt, options = {}) {
   if (!OPENAI_KEY) {
@@ -252,7 +250,8 @@ async function callOpenAI(prompt, systemPrompt, options = {}) {
       },
 
       body: JSON.stringify(body),
-    }
+    },
+    { timeoutMs: options.timeoutMs }
   );
 
   if (!res.ok) {
@@ -278,11 +277,6 @@ async function callOpenAI(prompt, systemPrompt, options = {}) {
 
   return content.trim();
 }
-
-
-// ============================================================
-// GEMINI
-// ============================================================
 
 async function callGemini(prompt, systemPrompt, options = {}) {
   if (!GEMINI_KEY) {
@@ -311,30 +305,34 @@ async function callGemini(prompt, systemPrompt, options = {}) {
     `https://generativelanguage.googleapis.com/v1beta/models/${model}` +
     `:generateContent?key=${GEMINI_KEY}`;
 
-  const res = await fetchWithRetry(url, {
-    method: "POST",
+  const res = await fetchWithRetry(
+    url,
+    {
+      method: "POST",
 
-    headers: {
-      "Content-Type": "application/json",
-    },
-
-    body: JSON.stringify({
-      contents: [
-        {
-          parts: [
-            {
-              text: fullPrompt,
-            },
-          ],
-        },
-      ],
-
-      generationConfig: {
-        temperature: options.temperature ?? 0.2,
-        maxOutputTokens: options.maxTokens || 1200,
+      headers: {
+        "Content-Type": "application/json",
       },
-    }),
-  });
+
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [
+              {
+                text: fullPrompt,
+              },
+            ],
+          },
+        ],
+
+        generationConfig: {
+          temperature: options.temperature ?? 0.2,
+          maxOutputTokens: options.maxTokens || 1200,
+        },
+      }),
+    },
+    { timeoutMs: options.timeoutMs }
+  );
 
   if (!res.ok) {
     const errorText = await res.text();
@@ -361,11 +359,6 @@ async function callGemini(prompt, systemPrompt, options = {}) {
   return content.trim();
 }
 
-
-// ============================================================
-// OLLAMA
-// ============================================================
-
 async function callOllama(prompt, systemPrompt, options = {}) {
   const messages = [];
 
@@ -385,26 +378,30 @@ async function callOllama(prompt, systemPrompt, options = {}) {
     content: prompt,
   });
 
-  const res = await fetchWithRetry(`${OLLAMA_URL}/api/chat`, {
-    method: "POST",
+  const res = await fetchWithRetry(
+    `${OLLAMA_URL}/api/chat`,
+    {
+      method: "POST",
 
-    headers: {
-      "Content-Type": "application/json",
-    },
-
-    body: JSON.stringify({
-      model: options.model || OLLAMA_MODEL,
-
-      messages,
-
-      stream: false,
-
-      options: {
-        temperature: options.temperature ?? 0.2,
-        num_predict: options.maxTokens || 1200,
+      headers: {
+        "Content-Type": "application/json",
       },
-    }),
-  });
+
+      body: JSON.stringify({
+        model: options.model || OLLAMA_MODEL,
+
+        messages,
+
+        stream: false,
+
+        options: {
+          temperature: options.temperature ?? 0.2,
+          num_predict: options.maxTokens || 1200,
+        },
+      }),
+    },
+    { timeoutMs: options.timeoutMs }
+  );
 
   if (!res.ok) {
     const errorText = await res.text();
@@ -429,11 +426,6 @@ async function callOllama(prompt, systemPrompt, options = {}) {
 
   return content.trim();
 }
-
-
-// ============================================================
-// CORE AI DISPATCHER
-// ============================================================
 
 async function callAI(
   prompt,
@@ -478,14 +470,6 @@ async function callAI(
   }
 }
 
-
-// ============================================================
-// ROBUST JSON PARSER
-// ============================================================
-
-// Repairs a truncated JSON ARRAY: walks the string tracking brace depth
-// (skipping braces inside quoted strings), finds the last position where a
-// top-level array element was fully closed, slices there, and closes the array.
 function attemptArrayRepair(jsonString) {
   const trimmed = jsonString.trim();
   if (!trimmed.startsWith("[")) {
@@ -545,12 +529,6 @@ function attemptArrayRepair(jsonString) {
   }
 }
 
-// NEW — repairs a truncated JSON OBJECT (this is the actual gap: getFairPrice,
-// detectScam, translate, and parseReceipt all return single objects, not
-// arrays, so attemptArrayRepair could never have helped them). Walks the
-// string tracking string/escape state and top-level comma positions, finds
-// the last point where a complete "key": value field ended, cuts there, and
-// closes the object — dropping only the one field that got cut off mid-write.
 function attemptObjectRepair(jsonString) {
   const trimmed = jsonString.trim();
   if (!trimmed.startsWith("{")) {
@@ -560,7 +538,7 @@ function attemptObjectRepair(jsonString) {
   let depth = 0;
   let inString = false;
   let escapeNext = false;
-  let lastSafeCutIndex = -1; // position of a comma that closed a complete top-level field
+  let lastSafeCutIndex = -1;
 
   for (let i = 0; i < trimmed.length; i++) {
     const char = trimmed[i];
@@ -598,7 +576,7 @@ function attemptObjectRepair(jsonString) {
   }
 
   if (lastSafeCutIndex === -1) {
-    return null; // truncated before even one field finished — nothing to salvage
+    return null;
   }
 
   const repaired = trimmed.slice(0, lastSafeCutIndex) + "}";
@@ -611,7 +589,6 @@ function attemptObjectRepair(jsonString) {
   }
 }
 
-// Dispatches to whichever repair strategy matches the truncated shape.
 function attemptJSONRepair(jsonString) {
   const trimmed = jsonString.trim();
   if (trimmed.startsWith("[")) {
@@ -623,8 +600,33 @@ function attemptJSONRepair(jsonString) {
   return null;
 }
 
-function parseJSON(raw) {
+function assertRequiredFields(result, requiredFields) {
+  if (!requiredFields || requiredFields.length === 0) {
+    return;
+  }
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    return;
+  }
+
+  const missing = requiredFields.filter((field) => {
+    const value = result[field];
+    return value === undefined || value === null || value === "";
+  });
+
+  if (missing.length > 0) {
+    console.error(
+      `AI response is missing required field(s): ${missing.join(", ")}. ` +
+      `Result had keys: ${Object.keys(result).join(", ")}`
+    );
+    throw new Error(
+      "The AI service returned an incomplete response. Please try again."
+    );
+  }
+}
+
+function parseJSON(raw, { requiredFields = [] } = {}) {
   if (raw && typeof raw === "object") {
+    assertRequiredFields(raw, requiredFields);
     return raw;
   }
 
@@ -645,14 +647,14 @@ function parseJSON(raw) {
     );
   }
 
-  // First attempt: entire response is JSON
   try {
-    return JSON.parse(cleaned);
-  } catch (_) {
-    // Continue to extraction
+    const parsed = JSON.parse(cleaned);
+    assertRequiredFields(parsed, requiredFields);
+    return parsed;
+  } catch (err) {
+    if (err.message.includes("incomplete response")) throw err;
   }
 
-  // Find first object or array
   const objectStart = cleaned.indexOf("{");
   const arrayStart = cleaned.indexOf("[");
 
@@ -683,8 +685,6 @@ function parseJSON(raw) {
   const end = Math.max(objectEnd, arrayEnd);
 
   if (end < start) {
-    // FIX: was attemptArrayRepair only — objects (getFairPrice, detectScam,
-    // translate, parseReceipt) could never be repaired here before.
     const repaired = attemptJSONRepair(cleaned.slice(start));
     if (repaired) {
       console.warn(
@@ -692,6 +692,7 @@ function parseJSON(raw) {
         Array.isArray(repaired) ? `array (${repaired.length} item(s))` : "object",
         "instead of failing the request."
       );
+      assertRequiredFields(repaired, requiredFields);
       return repaired;
     }
 
@@ -708,10 +709,12 @@ function parseJSON(raw) {
   const jsonString = cleaned.slice(start, end + 1);
 
   try {
-    return JSON.parse(jsonString);
+    const parsed = JSON.parse(jsonString);
+    assertRequiredFields(parsed, requiredFields);
+    return parsed;
   } catch (error) {
-    // FIX: same widening here — object truncation with noise around it now
-    // gets a repair attempt too, not just arrays.
+    if (error.message.includes("incomplete response")) throw error;
+
     const repaired = attemptJSONRepair(jsonString);
     if (repaired) {
       console.warn(
@@ -719,6 +722,7 @@ function parseJSON(raw) {
         Array.isArray(repaired) ? `array (${repaired.length} item(s))` : "object",
         "instead of failing the request."
       );
+      assertRequiredFields(repaired, requiredFields);
       return repaired;
     }
 
@@ -732,11 +736,6 @@ function parseJSON(raw) {
     );
   }
 }
-
-
-// ============================================================
-// SYSTEM PROMPTS
-// ============================================================
 
 const PRICE_SYSTEM = `
 You are Verifee's AI price engine for Indian markets.
@@ -774,11 +773,6 @@ IMPORTANT:
 - Do not use code fences.
 - Keep the translation concise.
 `;
-
-
-// ============================================================
-// FAIR PRICE
-// ============================================================
 
 exports.getFairPrice = async (
   product,
@@ -821,10 +815,6 @@ Rules:
 - No extra fields.
 `;
 
-  // FIX: 1400 -> 2000. The truncations in the logs were all cut off mid-string
-  // inside these free-text fields; the per-field word caps above reduce how
-  // often this happens at all, and the higher ceiling gives real headroom
-  // for the rest.
   const raw = await callAI(
     prompt,
     PRICE_SYSTEM,
@@ -835,13 +825,8 @@ Rules:
     }
   );
 
-  return parseJSON(raw);
+  return parseJSON(raw, { requiredFields: ["fairPriceMin", "fairPriceMax", "aiRecommendation"] });
 };
-
-
-// ============================================================
-// SCAM DETECTION
-// ============================================================
 
 exports.detectScam = async (
   product,
@@ -889,13 +874,8 @@ Rules:
     }
   );
 
-  return parseJSON(raw);
+  return parseJSON(raw, { requiredFields: ["verdict", "explanation"] });
 };
-
-
-// ============================================================
-// TRANSLATION
-// ============================================================
 
 exports.translate = async (
   text,
@@ -950,13 +930,8 @@ No extra fields.
     }
   );
 
-  return parseJSON(raw);
+  return parseJSON(raw, { requiredFields: ["translated"] });
 };
-
-
-// ============================================================
-// CHAT
-// ============================================================
 
 exports.chat = async (
   message,
@@ -990,11 +965,6 @@ Keep responses under 120 words unless the user asks for detail.
     }
   );
 };
-
-
-// ============================================================
-// PRODUCT IMAGE RECOGNITION
-// ============================================================
 
 exports.recognizeProduct = async (
   imageBase64
@@ -1059,7 +1029,8 @@ Return ONLY JSON:
 
         max_tokens: 800,
       }),
-    }
+    },
+    { timeoutMs: 20000 }
   );
 
   if (!res.ok) {
@@ -1088,11 +1059,6 @@ Return ONLY JSON:
 
   return parseJSON(content);
 };
-
-
-// ============================================================
-// RECEIPT PARSING
-// ============================================================
 
 exports.parseReceipt = async (
   textOrBase64
@@ -1133,24 +1099,9 @@ If a value is unavailable, use an empty string.
   return parseJSON(raw);
 };
 
-
-// ============================================================
-// RAW AI CALL
-// ============================================================
-
 exports.callAIRaw = callAI;
 
-
-// ============================================================
-// JSON PARSER EXPORT
-// ============================================================
-
 exports.parseJSON = parseJSON;
-
-
-// ============================================================
-// IMAGE ANALYSIS WITH CUSTOM PROMPT
-// ============================================================
 
 exports.analyzeImageWithPrompt = async (
   imageBase64,
@@ -1199,7 +1150,8 @@ exports.analyzeImageWithPrompt = async (
 
         max_tokens: 1000,
       }),
-    }
+    },
+    { timeoutMs: 20000 }
   );
 
   if (!res.ok) {
@@ -1228,11 +1180,6 @@ exports.analyzeImageWithPrompt = async (
 
   return parseJSON(content);
 };
-
-
-// ============================================================
-// PROVIDER INFORMATION
-// ============================================================
 
 exports.getProviderInfo = () => ({
   provider: AI_PROVIDER,
