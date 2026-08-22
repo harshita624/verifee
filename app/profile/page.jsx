@@ -227,8 +227,11 @@ export default function ProfilePage() {
   const joinedDate    = user.createdAt
     ? new Date(user.createdAt).toLocaleDateString("en-IN",{year:"numeric",month:"long"})
     : null;
-
-  const profileComplete = !!(user.name&&user.city&&user.phone);
+// FIX: banner text only asks for name + city, but the completeness check
+// also required phone — so filling in exactly what the banner asked for
+// (name + city) still left the banner showing forever, since phone was
+// never mentioned but silently required. Now the check matches the message.
+const profileComplete = !!(user.name && user.city);
 
   const TABS=[
     {id:"profile",label:"Profile"},
@@ -457,20 +460,21 @@ export default function ProfilePage() {
                   )}
 
                   {/* Empty state inside card — only show name/city fields that are missing */}
-                  {(!user.name||!user.city)&&(
-                    <div className="mt-4 pt-4 border-t border-zinc-50 flex items-center gap-3">
-                      <div className="flex-1">
-                        <p className="text-[12px] text-zinc-400 leading-relaxed">
-                          {!user.name&&"Add your name. "}
-                          {!user.city&&"Add your city for city-specific prices."}
-                        </p>
-                      </div>
-                      <button onClick={()=>setEditing(true)}
-                        className="shrink-0 text-[12px] font-semibold text-green-600 border border-green-200 bg-green-50 hover:bg-green-100 px-3 py-1.5 rounded-xl transition-colors">
-                        Add now
-                      </button>
-                    </div>
-                  )}
+                  {(!user.name||!user.city||!user.phone)&&(
+  <div className="mt-4 pt-4 border-t border-zinc-50 flex items-center gap-3">
+    <div className="flex-1">
+      <p className="text-[12px] text-zinc-400 leading-relaxed">
+        {!user.name&&"Add your name. "}
+        {!user.city&&"Add your city for city-specific prices. "}
+        {!user.phone&&"Add your phone number."}
+      </p>
+    </div>
+    <button onClick={()=>setEditing(true)}
+      className="shrink-0 text-[12px] font-semibold text-green-600 border border-green-200 bg-green-50 hover:bg-green-100 px-3 py-1.5 rounded-xl transition-colors">
+      Add now
+    </button>
+  </div>
+)}
                 </div>
 
                 {/* Right sidebar */}
