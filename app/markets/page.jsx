@@ -227,65 +227,108 @@ function MarketDetail({ market, onClose }) {
 
 export default function MarketsPage() {
   const { city: detectedCity } = useLocation();
-  const [search,    setSearch]    = useState("");
-  const [cityFilter,setCityFilter]= useState("");
-  const [markets,   setMarkets]   = useState([]);
-  const [loading,   setLoading]   = useState(true);
-  const [error,     setError]     = useState("");
-  const [selected,  setSelected]  = useState(null);
-  const searchTimer = useRef(null);
-  const cache       = useRef({});
+  const [search,          setSearch]          = useState("");
+  const [cityFilter,      setCityFilter]      = useState("");
+  // FIX: track what was actually last SUBMITTED to the API, separately from
+  // the live input/dropdown values — this drives all "Showing X in Y" /
+  // "no results for X" copy, so it stays accurate even while the user is
+  // mid-typing or has changed the dropdown but not searched yet.
+  const [submittedSearch, setSubmittedSearch] = useState("");
+  const [submittedCity,   setSubmittedCity]   = useState("");
+  const [markets,         setMarkets]         = useState([]);
+  const [loading,         setLoading]         = useState(true);
+  const [error,           setError]           = useState("");
+  const [selected,        setSelected]        = useState(null);
+  const cache          = useRef({});
+  const abortRef       = useRef(null);
+  const initialFetchRef = useRef(false);
 
-  // Set city from location on mount
+  // FIX: silently adopt the detected city into the dropdown once it resolves —
+  // this does NOT fetch anything on its own. Previously this same event
+  // (cityFilter changing) directly triggered a full AI call with zero user
+  // interaction, which is exactly the "search happens on its own" behavior
+  // that also collided with the mount-time fetch below and caused the 429
+  // cascade in your logs.
   useEffect(() => {
-    if (detectedCity && !cityFilter) setCityFilter(detectedCity);
+    if (detectedCity && !cityFilter) {
+      setCityFilter(detectedCity);
+    }
   }, [detectedCity]);
 
   const fetchMarkets = useCallback(async (q, city) => {
     const key = `${q}__${city}`;
-    if (cache.current[key]) { setMarkets(cache.current[key]); setLoading(false); return; }
 
-    setLoading(true); setError("");
+    if (cache.current[key]) {
+      setMarkets(cache.current[key]);
+      setLoading(false);
+      setError("");
+      return;
+    }
+
+    // FIX: cancel any request still in flight before starting a new one,
+    // instead of letting both race and potentially resolve out of order.
+    if (abortRef.current) abortRef.current.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    setLoading(true);
+    setError("");
+
     try {
-      const res  = await fetch(`${API}/api/v1/ai/markets-search`, {
-        method:  "POST",
+      const res = await fetch(`${API}/api/v1/ai/markets-search`, {
+        method: "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ query: q, city, limit: 9 }),
+        body: JSON.stringify({ query: q, city, limit: 9 }),
+        signal: controller.signal,
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message);
       cache.current[key] = data.data;
       setMarkets(data.data);
     } catch (e) {
+      if (e.name === "AbortError") return; // superseded by a newer search — not a real error
       setError(e.message || "Failed to load markets");
     } finally {
-      setLoading(false);
+      // Only the most recent request is allowed to clear the loading state —
+      // an aborted, stale request's `finally` must not stomp on a newer one.
+      if (abortRef.current === controller) {
+        setLoading(false);
+        abortRef.current = null;
+      }
     }
   }, []);
 
-  // Fetch on mount + city change
-  useEffect(() => {
-    fetchMarkets("", cityFilter);
-  }, [cityFilter, fetchMarkets]);
+  // FIX: this is now the ONLY thing that can trigger a fetch — a click on
+  // Search, an Enter keypress, or a "Try:" chip. Nothing fires automatically
+  // from typing or from changing the city dropdown.
+  const runSearch = useCallback((q, city) => {
+    const trimmedQ = (q ?? search).trim();
+    const targetCity = city ?? cityFilter;
+    setSubmittedSearch(trimmedQ);
+    setSubmittedCity(targetCity);
+    fetchMarkets(trimmedQ, targetCity);
+  }, [search, cityFilter, fetchMarkets]);
 
-  // Debounced search
+  // FIX: exactly one automatic fetch, guarded so it can only ever run once —
+  // this replaces the two separate effects that both fired on mount before.
   useEffect(() => {
-    clearTimeout(searchTimer.current);
-    if (!search.trim()) {
-      fetchMarkets("", cityFilter);
-      return;
-    }
-    searchTimer.current = setTimeout(() => {
-      fetchMarkets(search.trim(), cityFilter);
-    }, 600);
-    return () => clearTimeout(searchTimer.current);
-  }, [search]);
+    if (initialFetchRef.current) return;
+    initialFetchRef.current = true;
+    runSearch("", cityFilter);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handlePopularSearch = (item) => {
     setSearch(item.q);
     setCityFilter(item.city);
-    fetchMarkets(item.q, item.city);
+    runSearch(item.q, item.city);
   };
+
+  // Lets the UI nudge the user to re-search when they've changed a filter
+  // but haven't clicked Search yet, since changing filters no longer
+  // auto-fetches.
+  const filtersAreStale =
+    !loading && (search.trim() !== submittedSearch || cityFilter !== submittedCity);
 
   return (
     <div className="vf-page">
@@ -308,7 +351,7 @@ export default function MarketsPage() {
           </p>
 
           {/* Search row */}
-          <div className="flex flex-col sm:flex-row gap-3 mb-4">
+          <div className="flex flex-col sm:flex-row gap-3 mb-2">
             <div
               className="flex items-center gap-2 flex-1 bg-white rounded-xl border border-zinc-200 px-4 py-3 focus-within:border-green-400 transition-colors"
             >
@@ -316,6 +359,7 @@ export default function MarketsPage() {
               <input
                 value={search}
                 onChange={e => setSearch(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") runSearch(search, cityFilter); }}
                 placeholder="Search any market, bazaar, or shopping area..."
                 className="flex-1 text-[14px] text-zinc-800 placeholder:text-zinc-400 bg-transparent"
               />
@@ -336,7 +380,7 @@ export default function MarketsPage() {
             </select>
 
             <button
-              onClick={() => fetchMarkets(search, cityFilter)}
+              onClick={() => runSearch(search, cityFilter)}
               disabled={loading}
               className="flex items-center gap-2 btn-green text-[13px] px-5 py-3 rounded-xl disabled:opacity-60 shrink-0"
             >
@@ -347,8 +391,14 @@ export default function MarketsPage() {
             </button>
           </div>
 
+          {filtersAreStale && (
+            <p className="text-[12px] text-amber-600 font-medium mb-4">
+              Filters changed — click Search to update results.
+            </p>
+          )}
+
           {/* Popular searches */}
-          <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex items-center gap-2 flex-wrap mt-4">
             <span className="text-[12px] text-zinc-400 font-medium shrink-0">Try:</span>
             {POPULAR_SEARCHES.map(item => (
               <button
@@ -379,7 +429,7 @@ export default function MarketsPage() {
           ))}
           <span className="ml-auto text-[12px] text-zinc-400">
             {loading ? "Loading..." : `Showing ${markets.length} markets`}
-            {cityFilter && ` in ${cityFilter}`}
+            {submittedCity && ` in ${submittedCity}`}
           </span>
         </div>
       </div>
@@ -390,7 +440,7 @@ export default function MarketsPage() {
           <div className="bg-red-50 border border-red-100 rounded-2xl p-5 text-center mb-6">
             <p className="text-[14px] text-red-600 mb-2">{error}</p>
             <button
-              onClick={() => fetchMarkets(search, cityFilter)}
+              onClick={() => runSearch(submittedSearch, submittedCity)}
               className="text-[13px] font-semibold text-red-600 border border-red-200 px-4 py-2 rounded-xl hover:bg-red-50"
             >
               Try again
@@ -409,12 +459,12 @@ export default function MarketsPage() {
             <MapPin className="w-14 h-14 text-zinc-200 mx-auto mb-4" />
             <p className="text-[16px] font-bold text-zinc-700 mb-2">No markets found</p>
             <p className="text-[14px] text-zinc-400 mb-5">
-              {search
-                ? `No results for "${search}". Try a city name or different keyword.`
+              {submittedSearch
+                ? `No results for "${submittedSearch}". Try a city name or different keyword.`
                 : "Try selecting a city or searching for a market."}
             </p>
             <button
-              onClick={() => { setSearch(""); setCityFilter(""); }}
+              onClick={() => { setSearch(""); setCityFilter(""); runSearch("", ""); }}
               className="btn-green text-[13px] px-5 py-2.5 rounded-xl"
             >
               Show all markets
