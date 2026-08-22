@@ -110,12 +110,21 @@ exports.getMe = async (req, res) => {
 
 exports.updateProfile = async (req, res, next) => {
   try {
-    const { name, city, language, avatar } = req.body;
+    // FIX: was only reading name/city/language/avatar — phone, country, bio,
+    // and travelFrequency were silently dropped even though the frontend
+    // sends all of them. That's why those fields "saved" with no error but
+    // reverted on refresh: they were never written to the database at all.
+    const { name, phone, city, country, language, bio, travelFrequency, avatar } = req.body;
     const updates = {};
-    if (name) updates.name = name.trim();
-    if (city) updates.city = city.trim();
-    if (language) updates.language = language;
-    if (avatar) updates.avatar = avatar;
+
+    if (name !== undefined) updates.name = name.trim();
+    if (phone !== undefined) updates.phone = phone.trim();
+    if (city !== undefined) updates.city = city.trim();
+    if (country !== undefined) updates.country = country.trim();
+    if (language !== undefined) updates.language = language;
+    if (bio !== undefined) updates.bio = bio.trim();
+    if (travelFrequency !== undefined) updates.travelFrequency = travelFrequency;
+    if (avatar !== undefined) updates.avatar = avatar;
 
     const user = await User.findByIdAndUpdate(req.user._id, updates, {
       new: true,
