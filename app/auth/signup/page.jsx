@@ -6,6 +6,14 @@ import { useRouter } from "next/navigation";
 import { Shield, Eye, EyeOff, ArrowRight, Check } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 
+const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
+
+function safeNext() {
+  if (typeof window === "undefined") return "/dashboard";
+  const next = new URLSearchParams(window.location.search).get("next");
+  return next && next.startsWith("/") && !next.startsWith("//") ? next : "/dashboard";
+}
+
 export default function SignupPage() {
   const [form, setForm] = useState({ name: "", email: "", password: "" });
   const [showPass, setShowPass] = useState(false);
@@ -21,24 +29,27 @@ export default function SignupPage() {
     setError("");
     setLoading(true);
     try {
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000"}/api/v1/auth/signup`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(form),
-        }
-      );
+      const res = await fetch(`${API}/api/v1/auth/signup`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(form),
+      });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || "Signup failed");
       localStorage.setItem("vf_token", data.data.token);
       setLoggedIn(data.data.user);
-      router.push("/dashboard");
+      router.push(safeNext());
     } catch (err) {
       setError(err.message);
     } finally {
       setLoading(false);
     }
+  };
+
+  const loginHref = () => {
+    if (typeof window === "undefined") return "/auth/login";
+    const next = new URLSearchParams(window.location.search).get("next");
+    return next ? `/auth/login?next=${encodeURIComponent(next)}` : "/auth/login";
   };
 
   return (
@@ -60,7 +71,7 @@ export default function SignupPage() {
             </span>
           </Link>
           <h1 className="text-[26px] font-black text-zinc-950 mb-1">Create your account</h1>
-          <p className="text-[14px] text-zinc-500">Free — no credit card needed</p>
+          <p className="text-[14px] text-zinc-500">Free, no credit card needed</p>
         </div>
 
         <div className="bg-white rounded-2xl border border-zinc-100 p-6 shadow-sm">
@@ -155,7 +166,7 @@ export default function SignupPage() {
 
         <p className="text-center text-[13px] text-zinc-500 mt-5">
           Already have an account?{" "}
-          <Link href="/auth/login" className="text-green-600 font-semibold hover:underline">
+          <Link href={loginHref()} className="text-green-600 font-semibold hover:underline">
             Sign in
           </Link>
         </p>

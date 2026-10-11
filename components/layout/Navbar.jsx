@@ -5,26 +5,39 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   Menu, X, Shield, ChevronDown,
-  User, LogOut, Upload, LayoutDashboard, BarChart2,
+  User, LogOut, Upload, LayoutDashboard, BarChart2, Crown,
 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 
 const NAV = [
-  { label: "Check Price",    href: "/check-price"      },
-  { label: "Scam Detector",  href: "/scam-check"       },
-  { label: "Bargain Coach",  href: "/bargain"           },
-  { label: "Markets",        href: "/markets"           },
-  { label: "Compare Cities", href: "/compare"           },
-  { label: "Translate",      href: "/translate"         },
-  { label: "Scam Feed",      href: "/scam-feed"         },
+  { label: "Check Price",    href: "/check-price" },
+  { label: "Scam Detector",  href: "/scam-check"  },
+  { label: "Fair Pay",       href: "/pay"         },
+  { label: "Bargain Coach",  href: "/bargain"     },
+  { label: "Markets",        href: "/markets"     },
+  { label: "Compare Cities", href: "/compare"     },
+  { label: "Translate",      href: "/translate"   },
+  { label: "Scam Feed",      href: "/scam-feed"   },
+  { label: "Pricing",        href: "/pricing"     },
 ];
+
+function ProPill() {
+  return (
+    <span
+      className="inline-flex items-center gap-0.5 text-[9px] font-black px-1.5 py-0.5 rounded-full"
+      style={{ background: "#fef3c7", color: "#b45309" }}
+    >
+      <Crown className="w-2.5 h-2.5" /> PRO
+    </span>
+  );
+}
 
 function UserDropdown({ user, logout }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
 
   useEffect(() => {
-    const fn = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    const fn = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
     document.addEventListener("mousedown", fn);
     return () => document.removeEventListener("mousedown", fn);
   }, []);
@@ -48,6 +61,7 @@ function UserDropdown({ user, logout }) {
         <span className="text-[13px] font-semibold text-zinc-800 hidden sm:block max-w-[80px] truncate">
           {user?.name?.split(" ")[0] || user?.email?.split("@")[0] || "Me"}
         </span>
+        {user?.isPro && <ProPill />}
         <ChevronDown
           className="w-3.5 h-3.5 text-zinc-400 transition-transform duration-200"
           style={{ transform: open ? "rotate(180deg)" : "none" }}
@@ -66,10 +80,11 @@ function UserDropdown({ user, logout }) {
             <p className="text-[11px] text-zinc-400 truncate mt-0.5">{user?.email}</p>
           </div>
           {[
-            { icon: LayoutDashboard, label: "Dashboard", href: "/dashboard" },
-            { icon: User,            label: "Profile",   href: "/profile"   },
-            { icon: BarChart2,       label: "Compare",   href: "/compare"   },
-            { icon: Upload,          label: "Contribute",href: "/contribute" },
+            { icon: LayoutDashboard, label: "Dashboard",  href: "/dashboard"  },
+            { icon: User,            label: "Profile",    href: "/profile"    },
+            { icon: Crown,           label: user?.isPro ? "Manage Pro" : "Upgrade to Pro", href: "/pricing" },
+            { icon: BarChart2,       label: "Compare",    href: "/compare"    },
+            { icon: Upload,          label: "Contribute", href: "/contribute" },
           ].map(({ icon: Icon, label, href }) => (
             <Link key={label} href={href} onClick={() => setOpen(false)}
               className="flex items-center gap-3 px-4 py-2.5 text-[13px] text-zinc-700 hover:bg-zinc-50 transition-colors">
@@ -127,14 +142,14 @@ export default function Navbar() {
             </span>
           </Link>
 
-          {/* Desktop nav */}
+          {/* Desktop nav (9 links need the wider xl breakpoint) */}
           {!isAuth && (
-            <nav className="hidden lg:flex items-center gap-0.5 flex-1">
+            <nav className="hidden xl:flex items-center gap-0.5 flex-1">
               {NAV.map(link => {
                 const active = pathname === link.href;
                 return (
                   <Link key={link.href} href={link.href}
-                    className="text-[13px] font-medium px-3 py-2 rounded-lg transition-colors whitespace-nowrap"
+                    className="text-[13px] font-medium px-2.5 py-2 rounded-lg transition-colors whitespace-nowrap"
                     style={{
                       color:      active ? "#16a34a" : "#52525b",
                       background: active ? "#f0fdf4" : "transparent",
@@ -172,7 +187,7 @@ export default function Navbar() {
           {!isAuth && (
             <button
               onClick={() => setMobile(!mobile)}
-              className="lg:hidden ml-auto p-2 rounded-xl hover:bg-zinc-100 transition-colors"
+              className="xl:hidden ml-auto md:ml-2 p-2 rounded-xl hover:bg-zinc-100 transition-colors"
               aria-label="Toggle menu"
             >
               {mobile
@@ -185,8 +200,8 @@ export default function Navbar() {
 
       {/* Mobile menu */}
       {mobile && !isAuth && (
-        <div className="lg:hidden border-t border-zinc-100 animate-fade-in"
-          style={{ background: "rgba(255,255,255,0.99)" }}>
+        <div className="xl:hidden border-t border-zinc-100 animate-fade-in"
+          style={{ background: "rgba(255,255,255,0.99)", maxHeight: "calc(100vh - 60px)", overflowY: "auto" }}>
           <div className="container py-3">
             <div className="space-y-0.5 mb-3">
               {NAV.map(link => {
@@ -214,8 +229,9 @@ export default function Navbar() {
                       : (user.name?.charAt(0) || "U").toUpperCase()}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-[13px] font-bold text-zinc-900 truncate">
+                    <p className="text-[13px] font-bold text-zinc-900 truncate flex items-center gap-1.5">
                       {user.name || user.email}
+                      {user.isPro && <ProPill />}
                     </p>
                     <Link href="/profile" className="text-[11px] text-green-600 hover:underline">
                       View profile

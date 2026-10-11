@@ -1,10 +1,14 @@
 "use client";
 
 import { useState } from "react";
-import { Globe2, Loader2, Volume2, ArrowRight, ArrowLeftRight } from "lucide-react";
+import { Globe2, Loader2, Volume2, ArrowRight } from "lucide-react";
 import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
 import { LANGUAGES } from "@/lib/utils";
+
+// FIX: this page used the relative URL "/api/v1/ai/translate", which hits the
+// Next.js server (404 on Vercel) instead of the Express API like every other page.
+const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
 
 const QUICK_PHRASES = [
   "What is your best price?",
@@ -33,13 +37,13 @@ export default function TranslatePage() {
     setError("");
     setResult(null);
     try {
-      const res = await fetch("/api/v1/ai/translate", {
+      const res = await fetch(`${API}/api/v1/ai/translate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: t, targetLang }),
       });
-      if (!res.ok) throw new Error((await res.json()).message);
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.message || "Translation failed.");
       setResult(data.data);
     } catch (err) {
       setError(err.message || "Translation failed.");
@@ -67,15 +71,13 @@ export default function TranslatePage() {
             Bargain in any language.
           </h1>
           <p className="text-[15px] text-zinc-500 mb-8">
-            Translate shopping phrases into 11 Indian languages. Get the pronunciation
+            Translate shopping phrases into 10 Indian languages. Get the pronunciation
             and a cultural tip to shop like a local.
           </p>
 
           <div className="space-y-3">
             <div className="flex gap-3">
-              <div
-                className="flex-1 bg-white rounded-xl border border-zinc-200 p-4 focus-within:border-green-400 transition-colors"
-              >
+              <div className="flex-1 bg-white rounded-xl border border-zinc-200 p-4 focus-within:border-green-400 transition-colors">
                 <textarea
                   value={text}
                   onChange={(e) => setText(e.target.value)}
@@ -119,7 +121,6 @@ export default function TranslatePage() {
       <div className="max-w-3xl mx-auto px-5 py-8">
         <div className="grid md:grid-cols-[1fr_300px] gap-6">
           <div>
-            {/* Result */}
             {loading && (
               <div className="bg-white rounded-2xl border border-zinc-100 p-8 text-center">
                 <Loader2 className="w-8 h-8 text-blue-500 animate-spin mx-auto mb-3" />
@@ -180,7 +181,7 @@ export default function TranslatePage() {
 
                   {result.culturalTip && (
                     <div className="bg-green-50 rounded-xl p-4">
-                      <p className="text-[11px] text-green-500 font-semibold mb-1">💡 Cultural tip</p>
+                      <p className="text-[11px] text-green-500 font-semibold mb-1">Cultural tip</p>
                       <p className="text-[13px] text-green-800 leading-relaxed">{result.culturalTip}</p>
                     </div>
                   )}
@@ -198,19 +199,13 @@ export default function TranslatePage() {
             )}
           </div>
 
-          {/* Quick phrases */}
           <div>
-            <h3 className="text-[13px] font-semibold text-zinc-700 mb-3">
-              Shopping phrases
-            </h3>
+            <h3 className="text-[13px] font-semibold text-zinc-700 mb-3">Shopping phrases</h3>
             <div className="space-y-1.5">
               {QUICK_PHRASES.map((phrase) => (
                 <button
                   key={phrase}
-                  onClick={() => {
-                    setText(phrase);
-                    handleTranslate(phrase);
-                  }}
+                  onClick={() => { setText(phrase); handleTranslate(phrase); }}
                   className="w-full text-left text-[13px] text-zinc-600 hover:text-zinc-900 bg-white hover:bg-zinc-50 border border-zinc-100 hover:border-zinc-200 rounded-xl px-4 py-2.5 transition-all"
                 >
                   {phrase}

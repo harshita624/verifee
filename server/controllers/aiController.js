@@ -1,10 +1,37 @@
 const aiService  = require("../services/aiService");
-const mlService  = require("../services/mlService");
 const nlpService = require("../services/nlpService");
 const ragService = require("../services/ragService");
-const ScamReport = require("../models/ScamReport");
+const priceEngine = require("../services/priceEngine");
 
-// ── Fair price — city-specific AI prompt ──────────────────────────────────────
+const fail = (res, err, tag) => {
+  console.error(`${tag}:`, err.message);
+  res.status(err.statusCode || 500).json({ success: false, message: err.message });
+};
+
+// ── Fair price ────────────────────────────────────────────────────────────────
+// FIX: this used a different prompt than the Scam Detector and the Pay Guard, so
+// the same item got three different fair ranges. All three now call priceEngine.
+
+const toFairPriceResponse = (est, displayProduct, displayCity) => ({
+  product:          displayProduct,
+  city:             displayCity || "India",
+  fairPriceMin:     est.fairMin,
+  fairPriceMax:     est.fairMax,
+  localMarketAvg:   est.median,
+  onlineAvg:        est.onlineAvg,
+  touristPremium:   est.touristPremium,
+  bargainingStart:  est.bargainingStart,
+  bargainingTarget: est.bargainingTarget,
+  confidenceScore:  est.confidence,
+  dataSource:       est.dataSource,
+  dataPoints:       est.dataPoints,
+  trend:            est.trend,
+  aiRecommendation: est.aiRecommendation,
+  scamWarning:      est.scamWarning,
+  seasonalNote:     est.seasonalNote,
+  bestTimeToBuy:    est.bestTimeToBuy,
+  hint:             est.hint,
+});
 
 exports.getFairPrice = async (req, res) => {
   try {
@@ -18,99 +45,27 @@ exports.getFairPrice = async (req, res) => {
 
     nlpService.processQuery(`price of ${resolvedProduct} in ${resolvedCity}`, sid);
 
-    const rag = await ragService.buildContext(resolvedProduct, resolvedCity, null);
+    const est = await priceEngine.estimate({
+      product:  resolvedProduct,
+      city:     resolvedCity,
+      category: typeof category === "string" ? category : "",
+    });
 
-    let result;
-    if (rag.hasRealData && rag.distribution) {
-      const dist  = rag.distribution;
-      const trend = rag.trend;
-
-      result = {
-        product:          resolvedProduct,
-        city:             resolvedCity || "India",
-        fairPriceMin:     dist.p25,
-        fairPriceMax:     dist.p75,
-        localMarketAvg:   dist.median,
-        onlineAvg:        Math.round(dist.mean * 0.85),
-        touristPremium:   Math.round(((dist.p90 - dist.median) / (dist.median||1)) * 100),
-        bargainingStart:  dist.p10,
-        bargainingTarget: dist.p25,
-        confidenceScore:  Math.min(98, 40 + dist.count * 4),
-        dataSource:       "community_verified",
-        dataPoints:       dist.count,
-        trend:            trend?.trend || "Stable",
-        aiRecommendation: "",
-        scamWarning:      "",
-        seasonalNote:     "",
-        bestTimeToBuy:    "",
-      };
-
-      const advicePrompt =
-        `Product: "${resolvedProduct}", City: "${resolvedCity}". ` +
-        `Community data: median ₹${dist.median}, range ₹${dist.p25}–₹${dist.p75}, ` +
-        `${dist.count} verified purchases. ` +
-        `Give: (1) one specific bargaining tip, (2) scam warning if any, (3) best time to buy. ` +
-        `Under 80 words. No emojis.`;
-
-      const advice = await aiService.chat(advicePrompt, {}, []);
-      result.aiRecommendation = advice.split("\n")[0] || advice.slice(0,160);
-
-      if (trend?.trend === "Rising")
-        result.seasonalNote = `Prices rising — buy soon. Monthly increase approx ₹${trend.monthlyChange||"?"}`;
-      else if (trend?.trend === "Falling")
-        result.seasonalNote = "Prices falling — you have negotiating power.";
-    } else {
-      // City-specific AI fallback with explicit city pricing instruction
-      const system = `You are a fair price estimator for Indian PHYSICAL markets.
-CRITICAL: Give prices that are SPECIFIC to the city provided.
-- Mumbai prices are typically 25-40% HIGHER than Delhi
-- Jaipur, Varanasi, Agra are 10-25% CHEAPER than Delhi
-- Tourist hotspot markets are 30-80% more expensive than local bazaars
-- Do NOT give generic all-India prices — give the ACTUAL city price
-Return ONLY valid JSON, no markdown.`;
-
-      const prompt = `Estimate fair price for "${resolvedProduct}" in ${resolvedCity||"India"}.
-Category: ${category||"general"}
-
-IMPORTANT: Prices must be specific to ${resolvedCity||"India"}, not generic.
-
-Return exactly this JSON:
-{
-  "product": "${resolvedProduct}",
-  "city": "${resolvedCity||"India"}",
-  "fairPriceMin": <INR number specific to ${resolvedCity||"India"}>,
-  "fairPriceMax": <INR number specific to ${resolvedCity||"India"}>,
-  "localMarketAvg": <INR — what locals in ${resolvedCity||"India"} actually pay>,
-  "onlineAvg": <INR — online price comparison>,
-  "touristPremium": <percentage tourists overpay in this specific city>,
-  "bargainingStart": <INR — open negotiation here>,
-  "bargainingTarget": <INR — aim to pay this>,
-  "confidenceScore": <30-55 since no community data>,
-  "bestTimeToBuy": "<when to buy in ${resolvedCity||"India"}>",
-  "aiRecommendation": "<city-specific bargaining advice for ${resolvedCity||"India"}>",
-  "scamWarning": "<common scam for this product in ${resolvedCity||"India"} or empty>",
-  "trend": "<Rising|Stable|Falling>",
-  "seasonalNote": "<seasonal factor in ${resolvedCity||"India"} or empty>"
-}`;
-
-      const raw = await aiService.callAIRaw(prompt, system, { maxTokens: 800 });
-      result = { ...aiService.parseJSON(raw), dataSource: "ai_estimate", dataPoints: 0 };
-    }
-
-    res.json({ success: true, data: result });
+    res.json({ success: true, data: toFairPriceResponse(est, resolvedProduct, resolvedCity) });
   } catch (err) {
-    console.error("getFairPrice:", err.message);
-    res.status(500).json({ success: false, message: err.message });
+    fail(res, err, "getFairPrice");
   }
 };
 
 // ── Scam detection ────────────────────────────────────────────────────────────
+// The probability and verdict come from priceEngine.judge (numbers only).
+// The LLM is used ONLY to write the negotiation words.
 
 exports.detectScam = async (req, res) => {
   try {
     const { product, offeredPrice, city, place, sessionId } = req.body;
 
-    if (!product?.trim() || !offeredPrice || Number(offeredPrice)<=0)
+    if (!product?.trim() || !offeredPrice || Number(offeredPrice) <= 0)
       return res.status(400).json({ success: false, message: "Product and offered price required" });
 
     const price           = Number(offeredPrice);
@@ -121,81 +76,67 @@ exports.detectScam = async (req, res) => {
 
     nlpService.processQuery(`is ₹${price} fair for ${resolvedProduct} in ${resolvedCity}`, sid);
 
-    const [anomaly, distribution, scamHistory] = await Promise.all([
-      mlService.detectPriceAnomaly(resolvedProduct, resolvedCity, price),
-      mlService.getPriceDistribution(resolvedProduct, resolvedCity),
-      ScamReport.find({
-        product: { $regex: new RegExp(resolvedProduct.split(" ").join("|"),"i") },
-        ...(resolvedCity && { city: { $regex: new RegExp(resolvedCity,"i") } }),
-      }).select("severity chargedPrice fairPrice").limit(5).lean(),
-    ]);
+    const a   = await priceEngine.assess({
+      product: resolvedProduct, city: resolvedCity, place: resolvedPlace, price,
+    });
+    const est = a.est;
+    const fmt = (n) => Number(n).toLocaleString("en-IN");
 
-    let result;
-    if (anomaly.hasEnoughData) {
-      const zScore = anomaly.zScore;
-      const pct    = anomaly.overchargePercent;
+    let negotiationScript =
+      `Say: "The usual price for this is around ₹${fmt(est.fairMax)}. I'll pay ₹${fmt(est.bargainingTarget)}."`;
+    let walkAwayAdvice =
+      a.scamProbability >= 60 ? "Walk away. You can find better prices nearby." : "Try negotiating before you decide.";
+    let alternatives = [];
 
-      let scamProbability;
-      if      (zScore>3)  scamProbability = Math.min(99,85+zScore*3);
-      else if (zScore>2)  scamProbability = Math.min(84,60+zScore*12);
-      else if (zScore>1)  scamProbability = Math.min(59,30+zScore*18);
-      else                scamProbability = Math.max(5, zScore*20);
+    try {
+      const raw = await aiService.callAIRaw(
+        `Product: "${est.product}". Location: ${resolvedPlace || resolvedCity || "India"}.\n` +
+          `Quoted: ₹${price}. Fair range: ₹${est.fairMin}–₹${est.fairMax} ` +
+          `(${est.dataSource === "community_verified" ? `${est.dataPoints} verified community receipts` : "AI estimate"}). ` +
+          `Verdict: ${a.verdict}.\n` +
+          `Return JSON: {"say":"<one sentence to say to the seller right now>","walkAway":"<one sentence: should they walk away>","alternatives":["<better place nearby 1>","<better place nearby 2>"]}`,
+        "You coach tourists bargaining in Indian markets. Return ONLY valid JSON. No emojis.",
+        { maxTokens: 700, temperature: 0.2, timeoutMs: 20000, json: true }
+      );
+      const r = aiService.parseJSON(raw, { requiredFields: ["say"] });
+      negotiationScript = String(r.say).slice(0, 300);
+      if (r.walkAway) walkAwayAdvice = String(r.walkAway).slice(0, 300);
+      if (Array.isArray(r.alternatives)) alternatives = r.alternatives.map((s) => String(s).slice(0, 120)).slice(0, 3);
+    } catch (e) {
+      console.warn("detectScam: script generation failed, using fallback:", e.message);
+    }
 
-      if (scamHistory.length>0) scamProbability = Math.min(99,scamProbability+scamHistory.length*5);
-      scamProbability = Math.round(scamProbability);
+    const community = est.dataSource === "community_verified";
+    const explanation = community
+      ? `Statistical analysis of ${est.dataPoints} community receipts` +
+        `${a.zScore !== null ? `: Z-score ${a.zScore.toFixed(1)}` : ""}. Typical buyer pays ₹${fmt(Math.round(est.mean))}.`
+      : `Limited community data. AI estimate of ₹${fmt(est.fairMin)}–₹${fmt(est.fairMax)} for this market. ` +
+        `Contribute your receipt to improve accuracy.`;
 
-      const verdict = scamProbability>=70?"Scam":scamProbability>=40?"Suspicious":"Fair";
-      const communityMedian = distribution?.median || anomaly.mean;
-
-      const scriptPrompt =
-        `Product: "${resolvedProduct}", Location: "${resolvedPlace||resolvedCity||"India"}". ` +
-        `Quoted: ₹${price}. Community median: ₹${communityMedian}. ` +
-        `Overcharged ${pct}%. Verdict: ${verdict}. ` +
-        `Write 3 short lines: 1) Exact sentence to say NOW. 2) Walk away advice. ` +
-        `3) Two better places nearby. Under 80 words. No emojis.`;
-
-      const scriptText = await aiService.chat(scriptPrompt,{},[]);
-      const lines = scriptText.split("\n").filter(Boolean);
-
-      result = {
-        offeredPrice: price,
-        fairPriceMin: distribution?.p25 || Math.round(anomaly.mean*0.75),
-        fairPriceMax: distribution?.p75 || Math.round(anomaly.mean*1.2),
-        communityMedian,
-        scamProbability,
-        overpricingPercent: pct,
-        zScore: anomaly.zScore,
-        verdict,
-        dataPoints: anomaly.dataPoints,
-        dataSource: "community_verified",
-        explanation:
-          `Statistical analysis of ${anomaly.dataPoints} community receipts: ` +
-          `Z-score ${anomaly.zScore.toFixed(1)} ` +
-          `(${zScore>2?"strongly anomalous":zScore>1?"mildly high":"within normal range"}). ` +
-          `Typical buyer pays ₹${anomaly.mean.toLocaleString()}.`,
-        negotiationScript:
-          lines[0]||`Say: "Fair community price is ₹${communityMedian.toLocaleString()}. I'll pay that."`,
-        walkAwayAdvice:
-          lines[1]||(scamProbability>60?"Walk away — better options nearby.":"Try negotiating."),
-        alternatives: lines.slice(2),
-        historicalScamCount: scamHistory.length,
-      };
-    } else {
-      const raw = await aiService.detectScam(resolvedProduct, price, resolvedCity);
-      result = {
-        ...raw,
-        dataSource: "ai_estimate",
-        dataPoints: anomaly.dataPoints,
-        explanation:
-          `Limited community data (${anomaly.dataPoints} reports). ` +
-          `AI estimate — contribute your receipt to improve accuracy.`,
-      };
+    const result = {
+      offeredPrice:        price,
+      fairPriceMin:        est.fairMin,
+      fairPriceMax:        est.fairMax,
+      scamProbability:     a.scamProbability,
+      overpricingPercent:  Math.max(0, a.overpricingPercent),
+      verdict:             a.verdict,
+      dataPoints:          est.dataPoints,
+      dataSource:          est.dataSource,
+      explanation,
+      negotiationScript,
+      walkAwayAdvice,
+      alternatives,
+      historicalScamCount: a.scamHistory,
+      hint:                est.hint,
+    };
+    if (community) {
+      result.communityMedian = est.median;
+      if (a.zScore !== null) result.zScore = a.zScore;
     }
 
     res.json({ success: true, data: result });
   } catch (err) {
-    console.error("detectScam:", err.message);
-    res.status(500).json({ success: false, message: err.message });
+    fail(res, err, "detectScam");
   }
 };
 

@@ -6,6 +6,15 @@ import { useRouter } from "next/navigation";
 import { Shield, Eye, EyeOff, ArrowRight } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 
+const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
+
+// Only allow same-site relative paths, never an external URL (open-redirect safe).
+function safeNext() {
+  if (typeof window === "undefined") return "/dashboard";
+  const next = new URLSearchParams(window.location.search).get("next");
+  return next && next.startsWith("/") && !next.startsWith("//") ? next : "/dashboard";
+}
+
 export default function LoginPage() {
   const [form, setForm] = useState({ email: "", password: "" });
   const [showPass, setShowPass] = useState(false);
@@ -19,24 +28,27 @@ export default function LoginPage() {
     setError("");
     setLoading(true);
     try {
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000"}/api/v1/auth/login`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(form),
-        }
-      );
+      const res = await fetch(`${API}/api/v1/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(form),
+      });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || "Login failed");
       localStorage.setItem("vf_token", data.data.token);
       setLoggedIn(data.data.user);
-      router.push("/dashboard");
+      router.push(safeNext());
     } catch (err) {
       setError(err.message);
     } finally {
       setLoading(false);
     }
+  };
+
+  const signupHref = () => {
+    if (typeof window === "undefined") return "/auth/signup";
+    const next = new URLSearchParams(window.location.search).get("next");
+    return next ? `/auth/signup?next=${encodeURIComponent(next)}` : "/auth/signup";
   };
 
   return (
@@ -133,7 +145,7 @@ export default function LoginPage() {
 
         <p className="text-center text-[13px] text-zinc-500 mt-5">
           No account?{" "}
-          <Link href="/auth/signup" className="text-green-600 font-semibold hover:underline">
+          <Link href={signupHref()} className="text-green-600 font-semibold hover:underline">
             Create one free
           </Link>
         </p>
