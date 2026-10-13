@@ -1,11 +1,36 @@
 import Link from "next/link";
 import { Shield, MapPin, Mail } from "lucide-react";
+import { SITE } from "@/lib/site";
 
 const LINKS = {
-  Product:  ["Check Price","Scam Detector","Market Explorer","Translate","Contribute"],
-  Company:  ["About","Blog","Careers","Press","Contact"],
-  Support:  ["Help Center","Community","Report Scam","API Docs","Status"],
-  Legal:    ["Privacy Policy","Terms of Service","Cookie Policy","Disclaimer"],
+  Product: [
+    { label: "Check Price",     href: "/check-price" },
+    { label: "Scam Detector",   href: "/scam-check"  },
+    { label: "Fair Pay",        href: "/pay"         },
+    { label: "Market Explorer", href: "/markets"     },
+    { label: "Translate",       href: "/translate"   },
+    { label: "Contribute",      href: "/contribute"  },
+  ],
+  Company: [
+    { label: "About",    href: "/about"    },
+    { label: "Blog",     href: "/blog"     },
+    { label: "Careers",  href: "/careers"  },
+    { label: "Press",    href: "/press"    },
+    { label: "Contact",  href: "/contact"  },
+  ],
+  Support: [
+    { label: "Help Center", href: "/help"       },
+    { label: "Community",   href: "/community"  },
+    { label: "Report Scam", href: "/scam-feed"  },
+    { label: "API Docs",    href: "/api-docs"   },
+    { label: "Status",      href: "/status"     },
+  ],
+  Legal: [
+    { label: "Privacy Policy",   href: "/privacy"    },
+    { label: "Terms of Service", href: "/terms"      },
+    { label: "Cookie Policy",    href: "/cookies"    },
+    { label: "Disclaimer",       href: "/disclaimer" },
+  ],
 };
 
 export default function Footer() {
@@ -27,17 +52,20 @@ export default function Footer() {
             </Link>
 
             <p className="text-[13px] text-zinc-500 leading-relaxed mb-5 max-w-[180px]">
-              Know the fair price. Shop without fear. Travel with confidence.
+              {SITE.tagline}
             </p>
 
             <div className="space-y-2">
-              <a href="mailto:hello@verifee.in" className="flex items-center gap-2 text-[12px] text-zinc-400 hover:text-green-600 transition-colors">
-                <Mail className="w-3.5 h-3.5" />
-                hello@verifee.in
+              <a
+                href={`mailto:${SITE.contactEmail}`}
+                className="flex items-center gap-2 text-[12px] text-zinc-400 hover:text-green-600 transition-colors break-all"
+              >
+                <Mail className="w-3.5 h-3.5 shrink-0" />
+                {SITE.contactEmail}
               </a>
               <div className="flex items-center gap-2 text-[12px] text-zinc-400">
-                <MapPin className="w-3.5 h-3.5" />
-                Bangalore, India
+                <MapPin className="w-3.5 h-3.5 shrink-0" />
+                {SITE.location}
               </div>
             </div>
 
@@ -58,12 +86,12 @@ export default function Footer() {
               </h4>
               <ul className="space-y-2.5">
                 {items.map((item) => (
-                  <li key={item}>
+                  <li key={item.href}>
                     <Link
-                      href="#"
+                      href={item.href}
                       className="text-[13px] text-zinc-500 hover:text-zinc-900 transition-colors"
                     >
-                      {item}
+                      {item.label}
                     </Link>
                   </li>
                 ))}
@@ -72,11 +100,9 @@ export default function Footer() {
           ))}
         </div>
 
-        <div
-          className="flex flex-col sm:flex-row justify-between items-center gap-3 pt-8 border-t border-zinc-100"
-        >
+        <div className="flex flex-col sm:flex-row justify-between items-center gap-3 pt-8 border-t border-zinc-100">
           <p className="text-[12px] text-zinc-400">
-            © 2025 Verifee Technologies Pvt. Ltd. All rights reserved.
+            © {new Date().getFullYear()} {SITE.legalName}. All rights reserved.
           </p>
           <p className="text-[12px] text-zinc-400">
             Protecting travelers, one price at a time.
