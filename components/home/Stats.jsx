@@ -3,10 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 
 const STATS = [
-  { display: "2.4M+",  label: "Verified prices",   note: "Community submitted" },
-  { display: "1,200+", label: "Markets covered",    note: "Across 180+ cities"  },
-  { display: "380K+",  label: "Active users",       note: "Travelers & locals"  },
-  { display: "40%",    label: "Average savings",    note: "vs. tourist pricing" },
+  { display: "3+", label: "Verified reports", note: "Needed for a community range" },
+  { display: "11", label: "Bargaining languages", note: "Phrase and translation support" },
+  { display: "24h", label: "Estimate cache", note: "Shared across pricing screens" },
+  { display: "2", label: "Price sources", note: "AI estimates and community reports" },
 ];
 
 export default function Stats() {

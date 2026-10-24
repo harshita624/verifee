@@ -37,8 +37,8 @@ export default function CTA() {
             </h2>
 
             <p className="text-[18px] text-green-100/80 mb-10 max-w-xl mx-auto leading-relaxed">
-              Join 50,000+ travelers who check Verifee before every purchase.
-              Free, instant, and powered by real community data.
+              Check a local price, compare community reports, and get a bargaining tip.
+              Price checks are free to use.
             </p>
 
             <div className="flex flex-col sm:flex-row items-center justify-center gap-3">

@@ -416,17 +416,6 @@ export default function MarketsPage() {
       {/* Stats bar */}
       <div className="bg-white border-b border-zinc-100">
         <div className="container py-3 flex items-center gap-6 flex-wrap">
-          {[
-            { icon: Shield,      label: "Verified markets",  value: "1,200+", color: "#16a34a" },
-            { icon: TrendingDown,label: "Community reports",  value: "2.4M+",  color: "#0ea5e9" },
-            { icon: Star,        label: "Avg tourist savings",value: "40%",    color: "#8b5cf6" },
-          ].map(({ icon: Icon, label, value, color }) => (
-            <div key={label} className="flex items-center gap-2">
-              <Icon className="w-4 h-4" style={{ color }} />
-              <span className="text-[13px] font-bold text-zinc-900">{value}</span>
-              <span className="text-[12px] text-zinc-400 hidden sm:block">{label}</span>
-            </div>
-          ))}
           <span className="ml-auto text-[12px] text-zinc-400">
             {loading ? "Loading..." : `Showing ${markets.length} markets`}
             {submittedCity && ` in ${submittedCity}`}

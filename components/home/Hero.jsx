@@ -206,7 +206,7 @@ export default function Hero() {
             <div className="flex items-center gap-5 flex-wrap pt-6 border-t border-zinc-100">
               <div className="flex items-center gap-1.5">
                 <CheckCircle className="w-4 h-4 text-green-500" />
-                <span className="text-[12px] font-medium text-zinc-600">Receipt-verified prices</span>
+                <span className="text-[12px] font-medium text-zinc-600">Verified community prices</span>
               </div>
               <div className="flex items-center gap-1.5">
                 <AlertTriangle className="w-4 h-4 text-amber-500" />
@@ -214,7 +214,7 @@ export default function Hero() {
               </div>
               <div className="flex items-center gap-1.5">
                 <TrendingDown className="w-4 h-4 text-blue-500" />
-                <span className="text-[12px] font-medium text-zinc-600">Avg 40% savings</span>
+                <span className="text-[12px] font-medium text-zinc-600">Data-backed estimates</span>
               </div>
             </div>
           </div>

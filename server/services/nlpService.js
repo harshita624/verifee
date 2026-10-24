@@ -1,3 +1,5 @@
+const { normalizeProductName, productNameRegex, resolveProductMention } = require("../utils/productName");
+
 const CITY_ALIASES = {
   "delhi":"Delhi","new delhi":"Delhi","dilli":"Delhi",
   "mumbai":"Mumbai","bombay":"Mumbai",
@@ -158,8 +160,11 @@ function extractEntities(text) {
     if (lower.includes(alias)) { entities.city = canonical; break; }
   }
 
-  for (const [alias,canonical] of Object.entries(PRODUCT_ALIASES)) {
-    if (lower.includes(alias.toLowerCase())) { entities.product = canonical; break; }
+  for (const [alias, canonical] of Object.entries(PRODUCT_ALIASES).sort((a, b) => b[0].length - a[0].length)) {
+    if (productNameRegex(alias).test(text)) {
+      entities.product = resolveProductMention(text) || normalizeProductName(canonical);
+      break;
+    }
   }
 
   if (!entities.city) {
@@ -173,6 +178,7 @@ function extractEntities(text) {
     );
     if (m) entities.product = capitalise(m[1].trim());
   }
+  if (entities.product) entities.product = normalizeProductName(entities.product);
 
   const mktMatch = text.match(
     /([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\s+(?:Bazaar|Market|Chowk|Mandi|Mall|Nagar))/i

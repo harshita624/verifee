@@ -51,15 +51,15 @@ export default function Testimonials() {
       <div className="max-w-6xl mx-auto px-5">
         <div className="text-center mb-14">
           <p className="text-[13px] font-semibold text-green-600 uppercase tracking-widest mb-3">
-            Real stories
+            Illustrative scenarios
           </p>
           <h2 className="text-[36px] md:text-[48px] font-black text-zinc-950 leading-tight mb-4">
-            Trusted by travelers
+            See how travelers can use Verifee
             <br />
             across India.
           </h2>
           <p className="text-[17px] text-zinc-500">
-            From international tourists to domestic travelers — Verifee has their back.
+            Sample situations showing how price checks and bargaining guidance can help.
           </p>
         </div>
 
@@ -89,10 +89,10 @@ export default function Testimonials() {
                     {t.avatar}
                   </div>
                   <div>
-                    <p className="text-[14px] font-semibold text-zinc-900">{t.name}</p>
+                    <p className="text-[14px] font-semibold text-zinc-900">Example traveler</p>
                     <p className="text-[12px] text-zinc-400 flex items-center gap-1">
                       <MapPin className="w-3 h-3" />
-                      {t.location} · {t.role}
+                      Illustrative example · {t.location}
                     </p>
                   </div>
                 </div>

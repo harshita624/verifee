@@ -139,6 +139,7 @@ function extractCapture(order) {
     status: cap.status,
     value: Number(cap.amount?.value),
     currency: cap.amount?.currency_code,
+    createTime: cap.create_time,
   };
 }
 

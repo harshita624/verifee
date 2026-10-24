@@ -22,7 +22,7 @@ export default function PressPage() {
         <Card>
           <p className="text-[14px] text-zinc-700 leading-relaxed">
             Verifee is a price-transparency tool for physical markets in India. It combines
-            community-verified receipts, statistical scam detection and AI to tell travelers and
+            community-verified price reports, statistical scam detection and AI to tell travelers and
             locals what a fair price is before they pay. Its Fair Pay feature checks a vendor’s
             quote and then lets the buyer pay by UPI QR or PayPal.
           </p>

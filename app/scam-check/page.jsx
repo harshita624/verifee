@@ -45,7 +45,7 @@ function ScamResult({ result }) {
         {result.dataSource==="community_verified" ? (
           <span className="text-[11px] font-semibold px-2.5 py-1 rounded-full"
             style={{ background:"#f0fdf4",color:"#16a34a",border:"1px solid #dcfce7" }}>
-            Based on {result.dataPoints} verified community receipts
+            Based on {result.dataPoints} verified community price reports
           </span>
         ) : (
           <span className="text-[11px] font-semibold px-2.5 py-1 rounded-full"
@@ -74,28 +74,15 @@ function ScamResult({ result }) {
         </div>
       </div>
 
-      {result.zScore !== undefined && (
+      {result.priceComparison && (
         <div className="rounded-2xl bg-zinc-50 border border-zinc-100 p-4">
           <p className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wide mb-2">
-            Statistical analysis
+            Community price comparison
           </p>
           <p className="text-[13px] text-zinc-700 leading-relaxed">{result.explanation}</p>
-          {result.zScore && (
-            <div className="mt-2 flex items-center gap-2">
-              <div className="flex-1 h-2 bg-zinc-200 rounded-full overflow-hidden">
-                <div
-                  className="h-full rounded-full"
-                  style={{
-                    width: `${Math.min(100, Math.abs(result.zScore)/4*100)}%`,
-                    background: result.zScore>2?"#dc2626":result.zScore>1?"#f59e0b":"#16a34a",
-                  }}
-                />
-              </div>
-              <span className="text-[11px] font-bold text-zinc-500">
-                Z={result.zScore.toFixed(1)}
-              </span>
-            </div>
-          )}
+          <p className="mt-2 text-[12px] font-semibold text-zinc-600">
+            {result.priceComparison === "far_above" ? "Far above usual prices" : result.priceComparison === "above" ? "Above usual prices" : "Near usual prices"}
+          </p>
         </div>
       )}
 
@@ -219,8 +206,8 @@ function ScamCheckContent() {
             Is this price a scam?
           </h1>
           <p className="text-[14px] text-zinc-500 mb-7">
-            Enter what you were quoted. AI gives you the scam probability,
-            Z-score analysis against community data, and exactly what to say.
+            Enter what you were quoted. Get a scam risk estimate, a comparison with local prices,
+            and practical words to use when negotiating.
           </p>
 
           <form onSubmit={handleCheck} className="space-y-3">
@@ -348,7 +335,7 @@ function ScamCheckContent() {
               Analyzing scam probability{selectedPlace?` at ${selectedPlace}`:""}...
             </p>
             <p className="text-[13px] text-zinc-400 mt-1">
-              Running Z-score analysis against community data
+              Comparing the quote with local prices
             </p>
           </div>
         )}

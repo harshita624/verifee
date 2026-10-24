@@ -41,6 +41,7 @@ export default function DashboardPage() {
   const { user, loading: authLoading } = useAuth();
   const [profileData, setProfileData]  = useState(null);
   const [loading,     setLoading]      = useState(false);
+  const [myReports, setMyReports] = useState([]);
 
   useEffect(() => {
     if (!user) return;
@@ -54,6 +55,16 @@ export default function DashboardPage() {
       .then((d) => { if (d.success) setProfileData(d.data.user); })
       .catch(() => {})
       .finally(() => setLoading(false));
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) return;
+    const token = localStorage.getItem("vf_token");
+    if (!token) return;
+    fetch(`${API}/api/v1/prices/mine`, { cache: "no-store", headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => r.json())
+      .then((d) => { if (d.success) setMyReports(d.data || []); })
+      .catch(() => {});
   }, [user]);
 
   if (authLoading || loading) {
@@ -202,6 +213,30 @@ export default function DashboardPage() {
             sub="Keep contributing"
           />
         </div>
+
+        {myReports.length > 0 && (
+          <section className="bg-white rounded-2xl border border-zinc-100 p-5 mb-5">
+            <div className="flex items-center justify-between gap-3 mb-3">
+              <h2 className="text-[14px] font-bold text-zinc-900">Your contributions</h2>
+              <Link href="/contribute" className="text-[12px] font-semibold text-green-700 hover:underline">Add a price</Link>
+            </div>
+            <div className="divide-y divide-zinc-100">
+              {myReports.slice(0, 5).map((report) => (
+                <div key={report._id} className="flex items-center gap-3 py-3 first:pt-0 last:pb-0">
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-[13px] font-semibold text-zinc-900">{report.product}</p>
+                    <p className="truncate text-[11px] text-zinc-500">{report.city} · {new Date(report.createdAt).toLocaleDateString()}</p>
+                  </div>
+                  <p className="shrink-0 text-[13px] font-bold text-zinc-800">₹{Number(report.pricePaid || 0).toLocaleString("en-IN")}</p>
+                  <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold ${report.isVerified ? "bg-green-50 text-green-700" : "bg-amber-50 text-amber-700"}`}>
+                    {report.isVerified ? "Verified" : "Under review"}
+                  </span>
+                  {report.receiptUrl && <a href={report.receiptUrl.startsWith("http") ? report.receiptUrl : `${API}${report.receiptUrl}`} target="_blank" rel="noreferrer" className="shrink-0 text-[11px] font-semibold text-green-700 hover:underline">Receipt</a>}
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
 
         {/* Quick actions */}
         <div className="bg-white rounded-2xl border border-zinc-100 p-5 mb-5">

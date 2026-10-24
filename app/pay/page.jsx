@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   ScanLine, ShieldCheck, AlertTriangle, CheckCircle, Loader2,
@@ -13,6 +13,8 @@ import { api, parseUpiUri, buildUpiUri, isValidVpa, formatInr } from "@/lib/paym
 import QrScanner from "@/components/payments/QrScanner";
 import UpiQr from "@/components/payments/UpiQr";
 import PayPalButton from "@/components/payments/PayPalButton";
+import PurposePicker from "@/components/payments/PurposePicker";
+import CancelReasonDialog from "@/components/payments/CancelReasonDialog";
 
 const VERDICT = {
   Scam:       { color: "#dc2626", bg: "#fef2f2", label: "Likely overpriced" },
@@ -37,6 +39,10 @@ export default function FairPayPage() {
   const [method, setMethod] = useState("upi");
   const [ack, setAck] = useState(false);
   const [paid, setPaid] = useState(null);
+  const [purpose, setPurpose] = useState("shopping");
+  const [purposeTouched, setPurposeTouched] = useState(false);
+  const [cancelFor, setCancelFor] = useState(null); // orderId waiting for a cancel reason
+  const lastOrderRef = useRef(null);
 
   useEffect(() => {
     api("/payments/config", { auth: false }).then(setCfg).catch(() => {});
@@ -45,6 +51,13 @@ export default function FairPayPage() {
   useEffect(() => {
     if (detectedCity) setForm((f) => (f.city ? f : { ...f, city: detectedCity }));
   }, [detectedCity]);
+
+  // Suggest a purpose from the category until the buyer chooses one themselves.
+  useEffect(() => {
+    if (purposeTouched) return;
+    const map = { transport: "transport", food: "food", fruits: "food", hotels: "accommodation", tickets: "other" };
+    setPurpose(map[form.category] || "shopping");
+  }, [form.category, purposeTouched]);
 
   // Any change to what's being checked invalidates the AI verdict.
   const update = (k, v) => {
@@ -117,8 +130,10 @@ export default function FairPayPage() {
         category: form.category,
         vendorName: vendor.pn,
         confirmRisk: ack,
+        purpose,
       },
     });
+    lastOrderRef.current = d.orderId;
     return d.orderId;
   };
 
@@ -130,6 +145,23 @@ export default function FairPayPage() {
     } catch (e) {
       setError({ text: e.message });
     }
+  };
+
+
+  // ── Cancellation reason ───────────────────────────────────────────────────
+  const sendCancel = async (reason, note) => {
+    try {
+      if (cancelFor) {
+        await api("/payments/paypal/cancel-order", {
+          method: "POST",
+          body: { orderId: cancelFor, reason, note },
+        });
+      }
+    } catch {
+      /* the checkout is cancelled either way; the reason is best-effort */
+    }
+    setCancelFor(null);
+    setError({ text: "Checkout cancelled. You were not charged." });
   };
 
   const approx =
@@ -283,7 +315,7 @@ export default function FairPayPage() {
                   </div>
                   <p className="text-[11px] mt-3" style={{ color: v.color }}>
                     {guard.dataSource === "community_verified"
-                      ? `Based on ${guard.dataPoints} verified community receipts${guard.zScore != null ? ` (Z-score ${Number(guard.zScore).toFixed(1)})` : ""}.`
+                      ? `Based on ${guard.dataPoints} verified community price reports.`
                       : "AI estimate. No community data for this item yet."}
                   </p>
                 </div>
@@ -365,6 +397,11 @@ export default function FairPayPage() {
                       </div>
                     ) : (
                       <div className="space-y-3">
+                        <PurposePicker
+                          purposes={cfg.purposes}
+                          value={purpose}
+                          onChange={(id) => { setPurpose(id); setPurposeTouched(true); }}
+                        />
                         <p className="text-[12px] text-zinc-500">You&apos;ll be charged about <b>{approx}</b> ({formatInr(amount)}).</p>
                         <PayPalButton
                           clientId={cfg.paypal.clientId}
@@ -373,7 +410,7 @@ export default function FairPayPage() {
                           createOrder={createOrder}
                           onApproved={onApproved}
                           onError={(e) => setError({ text: e?.message || "PayPal checkout failed. Please try again." })}
-                          onCancel={() => setError({ text: "Checkout cancelled. You haven't been charged." })}
+                          onCancel={(orderId) => setCancelFor(orderId || lastOrderRef.current)}
                         />
                         <p className="text-[11px] text-zinc-400 leading-relaxed">
                           {cfg.paypal.env === "sandbox" && "Test mode: use a PayPal sandbox buyer account, no real money moves. "}
@@ -413,6 +450,13 @@ export default function FairPayPage() {
           </div>
         </div>
       </div>
+      {cancelFor && cfg?.cancelReasons?.fair_pay && (
+        <CancelReasonDialog
+          reasons={cfg.cancelReasons.fair_pay}
+          onSubmit={sendCancel}
+          onSkip={() => sendCancel("skipped", "")}
+        />
+      )}
     </div>
   );
 }

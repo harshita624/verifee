@@ -7,6 +7,8 @@ const paypal = require("../services/paypalService");
 const priceEngine = require("../services/priceEngine");
 const aiService = require("../services/aiService");
 const { awardXp } = require("../utils/xp");
+const { extractLastPrice, safeLiveReply } = require("../utils/bargainOffer");
+const { PURPOSES, PREMIUM_PURPOSE, CANCEL_REASONS } = require("../config/paymentMeta");
 
 // ── Config ───────────────────────────────────────────────────────────────────
 
@@ -45,6 +47,8 @@ const serializePayment = (p) => ({
   currency: p.currency,
   amountInr: p.amountInr,
   status: p.status,
+  purpose: p.purpose,
+  cancelReason: p.cancel?.reason,
   createdAt: p.createdAt,
   metadata: p.metadata,
   upi: p.upi ? { txnRef: p.upi.txnRef } : undefined,
@@ -66,6 +70,8 @@ exports.getConfig = (req, res) => {
         merchantName: process.env.UPI_MERCHANT_NAME || "Verifee",
       },
       inrPerUsd: INR_PER_USD,
+      purposes: PURPOSES,
+      cancelReasons: CANCEL_REASONS,
       freeDailyPremiumCalls: Number(process.env.FREE_DAILY_PREMIUM_CALLS) || 3,
     },
   });
@@ -118,6 +124,7 @@ async function fulfil(paymentId, info = {}) {
   if (info.captureId) set.paypalCaptureId = info.captureId;
   if (info.payerEmail) set.payerEmail = info.payerEmail;
   if (info.payerId) set.payerId = info.payerId;
+  if (info.capturedAt) set.capturedAt = new Date(info.capturedAt);
 
   const payment = await Payment.findOneAndUpdate(
     { _id: paymentId, status: { $nin: ["captured", "refunded"] } },
@@ -174,7 +181,7 @@ exports.guard = async (req, res, next) => {
       throw httpError(503, "Could not estimate a fair price right now. Please try again in a moment.");
     }
 
-    const { est, scamProbability, verdict, overpricingPercent, zScore } = a;
+    const { est, scamProbability, verdict, overpricingPercent } = a;
     const fairMin = est.fairMin;
     const fairMax = est.fairMax;
     const dataSource = est.dataSource;
@@ -182,13 +189,14 @@ exports.guard = async (req, res, next) => {
 
     // LLM: counter-offer + words to say. Falls back to a deterministic answer.
     let counterOffer = est.bargainingTarget;
-    let say = `I know the usual price for this is around ₹${Math.round(fairMax).toLocaleString("en-IN")}. Can you do ₹${Math.round(est.bargainingTarget).toLocaleString("en-IN")}?`;
+    let say = safeLiveReply({ sellerPrice: price, targetPrice: est.bargainingTarget, lang: "en" }).say;
     let sayHindi = "";
     let why = "";
-    try {
+    if (price > est.bargainingTarget) try {
       const raw = await aiService.callAIRaw(
         `Product: "${est.product}". City: ${city || "India"}${place ? `, ${place}` : ""}${vendorName ? `. Vendor: ${vendorName}` : ""}.\n` +
-          `The vendor quoted ₹${price}. Fair range is ₹${Math.round(fairMin)}–₹${Math.round(fairMax)} (${dataSource === "community_verified" ? `from ${dataPoints} verified community receipts` : "AI estimate"}).\n` +
+          `The vendor quoted ₹${price}. Fair range is ₹${Math.round(fairMin)}–₹${Math.round(fairMax)} (${dataSource === "community_verified" ? `from ${dataPoints} verified community price reports` : "AI estimate"}).\n` +
+          `Never tell the buyer to offer more than ₹${price}. Their target is ₹${Math.round(est.bargainingTarget)}; counter at or below that amount.\n` +
           `Verdict: ${verdict}.\n` +
           `Return JSON: {"counterOfferInr": <number to offer now>, "say": "<one polite sentence in English to say to the vendor>", "sayHindi": "<same sentence in Hindi, Roman letters>", "why": "<one sentence on why this works>"}`,
         "You are a negotiation coach for Indian markets. Return ONLY valid JSON. No markdown.",
@@ -197,13 +205,23 @@ exports.guard = async (req, res, next) => {
       const r = aiService.parseJSON(raw, { requiredFields: ["say"] });
       const c = Number(r.counterOfferInr);
       if (Number.isFinite(c) && c > 0) counterOffer = Math.round(c);
-      say = String(r.say).slice(0, 300);
-      sayHindi = String(r.sayHindi || "").slice(0, 300);
+      const sayPrice = extractLastPrice(r.say);
+      say = sayPrice !== null && sayPrice <= Math.min(price, est.bargainingTarget)
+        ? String(r.say).slice(0, 300)
+        : safeLiveReply({ sellerPrice: price, targetPrice: est.bargainingTarget, lang: "en" }).say;
+      const hindiPrice = extractLastPrice(r.sayHindi);
+      sayHindi = hindiPrice !== null && hindiPrice <= Math.min(price, est.bargainingTarget)
+        ? String(r.sayHindi).slice(0, 300)
+        : safeLiveReply({ sellerPrice: price, targetPrice: est.bargainingTarget, lang: "hi" }).say;
       why = String(r.why || "").slice(0, 300);
     } catch (e) {
       console.warn("guard: AI script failed:", e.message);
     }
-    counterOffer = Math.min(Math.round(price), Math.max(Math.round(fairMin * 0.8), counterOffer));
+    counterOffer = Math.min(
+      Math.round(price),
+      Math.round(est.bargainingTarget),
+      Math.max(Math.round(fairMin * 0.8), counterOffer)
+    );
 
     const guardToken = jwt.sign(
       {
@@ -237,7 +255,6 @@ exports.guard = async (req, res, next) => {
         say,
         sayHindi,
         why,
-        zScore,
         dataSource,
         dataPoints,
         hint: est.hint,
@@ -283,6 +300,7 @@ exports.createPaypalOrder = async (req, res, next) => {
         amount: planAmount(plan),
         amountInr: plan.inr,
         description: `Verifee ${plan.name}`,
+        purpose: PREMIUM_PURPOSE,
         metadata: {},
       };
     } else if (kind === "fair_pay") {
@@ -295,10 +313,14 @@ exports.createPaypalOrder = async (req, res, next) => {
       if (guard.verdict === "Scam" && req.body.confirmRisk !== true)
         throw httpError(409, "AI Pay Guard flagged this price as likely overpriced. Confirm that you want to continue.");
 
+      const purpose = PURPOSES.find((x) => x.id === req.body.purpose)?.id;
+      if (!purpose) throw httpError(400, "Tell us what this payment is for.");
+
       const category = CATEGORY_IDS.includes(req.body.category) ? req.body.category : "souvenirs";
       const vendorName = String(req.body.vendorName || "").trim().slice(0, 80);
       doc = {
         kind,
+        purpose,
         amount: inrToPay(amountInr),
         amountInr,
         description: `Verifee Fair Pay - ${guard.product}`,
@@ -327,6 +349,7 @@ exports.createPaypalOrder = async (req, res, next) => {
       amount: doc.amount,
       currency: PAY_CURRENCY,
       amountInr: doc.amountInr,
+      purpose: doc.purpose,
       status: "created",
       metadata: doc.metadata,
     });
@@ -364,6 +387,8 @@ exports.capturePaypalOrder = async (req, res, next) => {
     const payment = await Payment.findOne({ paypalOrderId: orderId, user: req.user._id });
     if (!payment) throw httpError(404, "Order not found.");
     if (payment.status === "captured") return respondCaptured(res, payment, req.user._id);
+    if (payment.status === "cancelled")
+      throw httpError(409, "This checkout was cancelled. Please start a new payment.");
 
     let order;
     try {
@@ -396,6 +421,7 @@ exports.capturePaypalOrder = async (req, res, next) => {
 
     const { payment: done } = await fulfil(payment._id, {
       captureId: cap.id,
+      capturedAt: cap.createTime,
       payerEmail: order.payer?.email_address,
       payerId: order.payer?.payer_id,
     });
@@ -407,6 +433,56 @@ exports.capturePaypalOrder = async (req, res, next) => {
 
 // PayPal → us. Only processed when PAYPAL_WEBHOOK_ID is set and the signature
 // verifies; otherwise events are ignored so nobody can forge a plan upgrade.
+//
+// Handled events: capture completed / pending / denied / refunded / reversed.
+// Each processed event is logged on the payment (deduplicated by event id).
+// Events are logged AFTER they are applied, so a failed run is retried by PayPal.
+const WEBHOOK_EVENTS = [
+  "PAYMENT.CAPTURE.COMPLETED",
+  "PAYMENT.CAPTURE.PENDING",
+  "PAYMENT.CAPTURE.DENIED",
+  "PAYMENT.CAPTURE.REFUNDED",
+  "PAYMENT.CAPTURE.REVERSED",
+];
+
+async function findPaymentForEvent(resource) {
+  const orderId = resource.supplementary_data?.related_ids?.order_id;
+  if (orderId) {
+    const byOrder = await Payment.findOne({ paypalOrderId: orderId });
+    if (byOrder) return byOrder;
+  }
+  // custom_id is the Payment _id we attached to the order when creating it.
+  if (resource.custom_id && /^[a-f0-9]{24}$/i.test(resource.custom_id)) {
+    const byId = await Payment.findById(resource.custom_id);
+    if (byId) return byId;
+  }
+  // Refund events link back to their capture.
+  const up = (resource.links || []).find((l) => l.rel === "up")?.href || "";
+  const captureId = up.split("/").pop();
+  return captureId ? Payment.findOne({ paypalCaptureId: captureId }) : null;
+}
+
+async function markRefunded(payment, refundId, when) {
+  const updated = await Payment.findOneAndUpdate(
+    { _id: payment._id, status: "captured" },
+    { $set: { status: "refunded", "refund.id": refundId, "refund.at": when ? new Date(when) : new Date() } },
+    { new: true }
+  );
+  if (!updated || updated.kind !== "pro_plan") return;
+
+  const plan = PLANS[updated.plan];
+  const user = await User.findById(updated.user);
+  if (!user || !plan || !user.planExpires) return;
+  const expires = user.planExpires.getTime() - plan.days * 86_400_000;
+  if (expires <= Date.now()) {
+    user.plan = "free";
+    user.planExpires = undefined;
+  } else {
+    user.planExpires = new Date(expires);
+  }
+  await user.save({ validateBeforeSave: false });
+}
+
 exports.webhook = async (req, res) => {
   try {
     if (!process.env.PAYPAL_WEBHOOK_ID) return res.json({ success: true, ignored: true });
@@ -415,43 +491,44 @@ exports.webhook = async (req, res) => {
 
     const event = req.body;
     const resource = event.resource || {};
+    const type = event.event_type;
+    if (!WEBHOOK_EVENTS.includes(type)) return res.json({ success: true, ignored: true });
 
-    if (event.event_type === "PAYMENT.CAPTURE.COMPLETED") {
-      const orderId = resource.supplementary_data?.related_ids?.order_id;
-      const payment = orderId ? await Payment.findOne({ paypalOrderId: orderId }) : null;
-      if (
-        payment &&
-        payment.status !== "captured" &&
+    const payment = await findPaymentForEvent(resource);
+    if (!payment) return res.json({ success: true, matched: false });
+    if ((payment.events || []).some((e) => e.eventId === event.id))
+      return res.json({ success: true, duplicate: true });
+
+    if (type === "PAYMENT.CAPTURE.COMPLETED") {
+      const amountOk =
         Math.abs(Number(resource.amount?.value) - payment.amount) <= 0.009 &&
-        resource.amount?.currency_code === payment.currency
-      ) {
-        await fulfil(payment._id, { captureId: resource.id, payerEmail: resource.payer?.email_address });
+        resource.amount?.currency_code === payment.currency;
+      if (payment.status !== "captured" && amountOk) {
+        await fulfil(payment._id, {
+          captureId: resource.id,
+          payerEmail: resource.payer?.email_address,
+          capturedAt: resource.create_time,
+        });
       }
+    } else if (type === "PAYMENT.CAPTURE.PENDING") {
+      await Payment.updateOne(
+        { _id: payment._id, status: { $in: ["created", "approved"] } },
+        { $set: { status: "approved" } }
+      );
+    } else if (type === "PAYMENT.CAPTURE.DENIED") {
+      await Payment.updateOne(
+        { _id: payment._id, status: { $nin: ["captured", "refunded"] } },
+        { $set: { status: "failed" } }
+      );
+    } else {
+      // REFUNDED or REVERSED
+      await markRefunded(payment, resource.id, resource.create_time);
     }
 
-    if (["PAYMENT.CAPTURE.REFUNDED", "PAYMENT.CAPTURE.REVERSED"].includes(event.event_type)) {
-      const up = (resource.links || []).find((l) => l.rel === "up")?.href || "";
-      const captureId = up.split("/").pop() || resource.id;
-      const payment = await Payment.findOne({ paypalCaptureId: captureId });
-      if (payment && payment.status === "captured") {
-        payment.status = "refunded";
-        await payment.save();
-        if (payment.kind === "pro_plan") {
-          const plan = PLANS[payment.plan];
-          const user = await User.findById(payment.user);
-          if (user && plan && user.planExpires) {
-            const expires = user.planExpires.getTime() - plan.days * 86_400_000;
-            if (expires <= Date.now()) {
-              user.plan = "free";
-              user.planExpires = undefined;
-            } else {
-              user.planExpires = new Date(expires);
-            }
-            await user.save({ validateBeforeSave: false });
-          }
-        }
-      }
-    }
+    await Payment.updateOne(
+      { _id: payment._id },
+      { $push: { events: { $each: [{ type, eventId: event.id, at: new Date() }], $slice: -30 } } }
+    );
 
     res.json({ success: true });
   } catch (err) {
@@ -570,6 +647,88 @@ exports.adminReviewUpi = async (req, res, next) => {
 
     const { payment: done } = await fulfil(payment._id);
     res.json({ success: true, data: { payment: serializePayment(done) } });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ── Cancellation reasons ─────────────────────────────────────────────────────
+// Called when the buyer closes PayPal checkout. Nothing was charged, but we keep
+// the order and WHY it was abandoned. Only an explicit cancel can be recorded:
+// a closed tab never reaches us (see adminInsights → abandonedNoReason).
+
+exports.cancelPaypalOrder = async (req, res, next) => {
+  try {
+    const orderId = String(req.body.orderId || "");
+    if (!/^[A-Z0-9-]{8,40}$/i.test(orderId)) throw httpError(400, "Invalid order id.");
+
+    const payment = await Payment.findOne({ paypalOrderId: orderId, user: req.user._id });
+    if (!payment) throw httpError(404, "Order not found.");
+
+    // Already answered: keep the first real reason (idempotent).
+    if (payment.status === "cancelled" && payment.cancel?.reason && payment.cancel.reason !== "skipped")
+      return res.json({ success: true, message: "Checkout cancelled. You were not charged." });
+
+    if (!["created", "cancelled"].includes(payment.status))
+      throw httpError(409, "This payment can no longer be cancelled.");
+
+    const allowed = (CANCEL_REASONS[payment.kind] || []).map((r) => r.id);
+    const reason =
+      req.body.reason === "skipped" ? "skipped" : allowed.includes(req.body.reason) ? req.body.reason : null;
+    if (!reason) throw httpError(400, "Choose one of the listed reasons.");
+
+    const note = reason === "other" ? String(req.body.note || "").trim().slice(0, 200) : "";
+
+    payment.status = "cancelled";
+    payment.cancel = { reason, note: note || undefined, at: payment.cancel?.at || new Date() };
+    await payment.save();
+
+    res.json({ success: true, message: "Thanks. Checkout cancelled and you were not charged." });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ── Admin: what are people paying for, and why do they walk away? ────────────
+
+exports.adminInsights = async (req, res, next) => {
+  try {
+    const staleBefore = new Date(Date.now() - 60 * 60 * 1000);
+
+    const [byStatus, capturedByPurpose, cancelReasons, abandonedNoReason] = await Promise.all([
+      Payment.aggregate([{ $group: { _id: { provider: "$provider", status: "$status" }, count: { $sum: 1 } } }]),
+      Payment.aggregate([
+        { $match: { status: "captured" } },
+        { $group: { _id: "$purpose", count: { $sum: 1 }, totalInr: { $sum: "$amountInr" } } },
+        { $sort: { count: -1 } },
+      ]),
+      Payment.aggregate([
+        { $match: { status: "cancelled" } },
+        { $group: { _id: { kind: "$kind", reason: "$cancel.reason" }, count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+      ]),
+      // PayPal checkouts opened over an hour ago that neither completed nor were cancelled
+      Payment.countDocuments({ provider: "paypal", status: "created", createdAt: { $lt: staleBefore } }),
+    ]);
+
+    const paypalCount = (status) =>
+      byStatus
+        .filter((x) => x._id.provider === "paypal" && x._id.status === status)
+        .reduce((sum, x) => sum + x.count, 0);
+
+    const captured = paypalCount("captured");
+    const finished = captured + paypalCount("cancelled") + abandonedNoReason;
+
+    res.json({
+      success: true,
+      data: {
+        byStatus,
+        capturedByPurpose,
+        cancelReasons,
+        abandonedNoReason,
+        paypalConversionPercent: finished ? Math.round((captured / finished) * 100) : null,
+      },
+    });
   } catch (err) {
     next(err);
   }

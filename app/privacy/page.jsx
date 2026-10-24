@@ -20,7 +20,7 @@ const SECTIONS = [
     ul: [
       "Account details: your name and email address, and a password that we store only as a one-way hash. Optional profile fields you add: phone number, city, country, language, bio, travel frequency and avatar link.",
       "Contributions: price reports and scam reports you submit (product, price, city, market, shop, notes). Your name may be shown next to scam reports you submit while signed in. The public leaderboard shows only your first name and last initial.",
-      "Payment records: the plan or purchase, amount, currency, status, PayPal order and capture IDs, the payer email PayPal returns, and the UPI transaction ID (UTR) you submit. We never see or store your card number. PayPal handles card and wallet details.",
+      "Payment records: the plan or purchase, amount, currency, status, timestamps, PayPal order and capture IDs, the payer email PayPal returns, refund details, and the UPI transaction ID (UTR) you submit. We also keep what you tell us the payment is for (for example transport or food) and, if you cancel checkout, the reason you give. We never see or store your card number. PayPal handles card and wallet details.",
       "What you send to our AI features: product names, prices, cities, chat messages and receipt photos you choose to upload.",
       "Technical data: your IP address and request metadata, used for rate limiting, free-quota counting, security and troubleshooting.",
       "Messages you send us through the contact form: name, email, topic and message.",
@@ -38,7 +38,7 @@ const SECTIONS = [
     ul: [
       "To run your account, show your XP, level and badges, and keep you signed in.",
       "To calculate fair prices, spot overcharging and improve accuracy using verified community reports.",
-      "To process payments and activate or extend Verifee Pro.",
+      "To process payments and activate or extend Verifee Pro, and to understand what people pay for and why they cancel so we can improve pricing and checkout.",
       "To send transactional email, such as password reset links and replies to your messages.",
       "To prevent abuse, enforce rate limits and the free daily quota, and keep the service secure.",
     ],

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   CheckCircle, Crown, Loader2, AlertTriangle, CreditCard,
@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import PayPalButton from "@/components/payments/PayPalButton";
+import CancelReasonDialog from "@/components/payments/CancelReasonDialog";
 import UpiQr from "@/components/payments/UpiQr";
 import { api, formatInr } from "@/lib/payments";
 
@@ -19,6 +20,7 @@ const STATUS_STYLE = {
   failed:               { label: "Failed",            bg: "#fef2f2", color: "#dc2626" },
   rejected:             { label: "Rejected",          bg: "#fef2f2", color: "#dc2626" },
   refunded:             { label: "Refunded",          bg: "#f4f4f5", color: "#71717a" },
+  cancelled:            { label: "Cancelled",         bg: "#f4f4f5", color: "#71717a" },
 };
 
 const fmtDate = (d) =>
@@ -35,6 +37,8 @@ export default function PricingPage() {
   const [utr, setUtr] = useState("");
   const [busy, setBusy] = useState(false);
   const [history, setHistory] = useState([]);
+  const [cancelFor, setCancelFor] = useState(null); // orderId waiting for a cancel reason
+  const lastOrderRef = useRef(null);
 
   useEffect(() => {
     api("/payments/config", { auth: false })
@@ -60,7 +64,25 @@ export default function PricingPage() {
   const createOrder = async () => {
     setMsg(null);
     const d = await api("/payments/paypal/create-order", { method: "POST", body: { kind: "pro_plan", plan } });
+    lastOrderRef.current = d.orderId;
     return d.orderId;
+  };
+
+  // ── Cancellation reason ─────────────────────────────────────────────────────
+  const sendCancel = async (reason, note) => {
+    try {
+      if (cancelFor) {
+        await api("/payments/paypal/cancel-order", {
+          method: "POST",
+          body: { orderId: cancelFor, reason, note },
+        });
+      }
+    } catch {
+      /* the checkout is cancelled either way; the reason is best-effort */
+    }
+    setCancelFor(null);
+    setMsg({ type: "err", text: "Checkout cancelled. You were not charged." });
+    loadHistory();
   };
 
   const onApproved = async (orderId) => {
@@ -288,7 +310,7 @@ export default function PricingPage() {
                         createOrder={createOrder}
                         onApproved={onApproved}
                         onError={(e) => setMsg({ type: "err", text: e?.message || "PayPal checkout failed. Please try again." })}
-                        onCancel={() => setMsg({ type: "err", text: "Checkout cancelled. You haven't been charged." })}
+                        onCancel={(orderId) => setCancelFor(orderId || lastOrderRef.current)}
                       />
                       <p className="text-[11px] text-zinc-400 leading-relaxed flex items-start gap-1.5">
                         <ShieldCheck className="w-3.5 h-3.5 shrink-0 mt-0.5" />
@@ -343,6 +365,13 @@ export default function PricingPage() {
           </div>
         </div>
       </div>
+      {cancelFor && cfg?.cancelReasons?.pro_plan && (
+        <CancelReasonDialog
+          reasons={cfg.cancelReasons.pro_plan}
+          onSubmit={sendCancel}
+          onSkip={() => sendCancel("skipped", "")}
+        />
+      )}
     </div>
   );
 }

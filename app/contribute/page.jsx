@@ -150,7 +150,9 @@ export default function ContributePage() {
 
   const [step,   setStep]   = useState(1);
   const [saving, setSaving] = useState(false);
+  const [receiptFile, setReceiptFile] = useState(null);
   const [done,   setDone]   = useState(false);
+  const [submissionResult, setSubmissionResult] = useState(null);
   const [error,  setError]  = useState("");
 
   const [form, setForm] = useState({
@@ -184,6 +186,23 @@ export default function ContributePage() {
     setError("");
     try {
       const token = localStorage.getItem("vf_token");
+      if (!token) throw new Error("Please sign in before submitting a contribution.");
+      let receiptUrl;
+      let receiptAssetId;
+      if (receiptFile) {
+        const uploadBody = new FormData();
+        uploadBody.append("receipt", receiptFile);
+        const uploadResponse = await fetch(`${API}/api/v1/prices/receipt`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+          body: uploadBody,
+        });
+        const uploadData = await uploadResponse.json();
+        if (!uploadResponse.ok) throw new Error(uploadData.message || "Receipt upload failed");
+        receiptUrl = uploadData.data?.receiptUrl;
+        receiptAssetId = uploadData.data?.receiptAssetId;
+        if (!receiptUrl && !receiptAssetId) throw new Error("The receipt uploaded, but the server did not return its reference.");
+      }
       const res   = await fetch(`${API}/api/v1/prices`, {
         method:  "POST",
         headers: {
@@ -199,10 +218,13 @@ export default function ContributePage() {
           marketName: form.marketName.trim(),
           shopName:   form.shopName.trim(),
           notes:      form.notes.trim(),
+          receiptUrl,
+          receiptAssetId,
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || "Submission failed");
+      setSubmissionResult(data);
       setDone(true);
     } catch (err) {
       setError(err.message || "Something went wrong. Please try again.");
@@ -226,15 +248,15 @@ export default function ContributePage() {
             Contribution submitted!
           </h2>
           <p className="text-[15px] text-zinc-500 mb-2 leading-relaxed">
-            You earned <span className="font-bold text-green-600">+50 XP</span> for helping
+            You earned <span className="font-bold text-green-600">+{submissionResult?.xpAwarded ?? 50} XP</span> for helping
             future travelers know the fair price.
           </p>
           <p className="text-[13px] text-zinc-400 mb-8">
-            Your report will be reviewed and verified by the community.
+            {submissionResult?.message || "Your price report has been submitted."}
           </p>
           <div className="flex flex-col sm:flex-row gap-3 justify-center">
             <button
-              onClick={() => { setDone(false); setStep(1); setForm({ product:"",category:"",customCat:"",pricePaid:"",quality:"good",city:"",marketName:"",shopName:"",notes:"" }); }}
+              onClick={() => { setDone(false); setSubmissionResult(null); setStep(1); setReceiptFile(null); setForm({ product:"",category:"",customCat:"",pricePaid:"",quality:"good",city:"",marketName:"",shopName:"",notes:"" }); }}
               className="flex items-center justify-center gap-2 btn-green text-[14px] px-6 py-3 rounded-xl"
             >
               <Plus className="w-4 h-4" /> Contribute another price
@@ -286,7 +308,7 @@ export default function ContributePage() {
                 <div className="flex-1 min-w-0">
                   <p className="text-[13px] font-bold text-amber-900">Sign in to earn XP</p>
                   <p className="text-[12px] text-amber-700">
-                    You can still contribute without an account, but you won't earn XP or badges.
+                    Sign in to submit a price and attach a receipt.
                   </p>
                 </div>
                 <Link href="/auth/login?next=/contribute">
@@ -489,6 +511,23 @@ export default function ContributePage() {
                     Review and submit
                   </h3>
 
+                  <div>
+                    <label htmlFor="receipt-upload" className="block text-[11px] font-semibold text-zinc-500 uppercase tracking-wide mb-1.5">
+                      Receipt or proof (optional)
+                    </label>
+                    <div className="rounded-xl border border-dashed border-zinc-300 p-4">
+                      <input
+                        id="receipt-upload"
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp,application/pdf"
+                        onChange={(e) => setReceiptFile(e.target.files?.[0] || null)}
+                        className="block w-full text-[13px] text-zinc-600 file:mr-3 file:rounded-lg file:border-0 file:bg-green-50 file:px-3 file:py-2 file:font-semibold file:text-green-700 hover:file:bg-green-100"
+                      />
+                      <p className="mt-2 text-[11px] text-zinc-400">JPG, PNG, WebP, or PDF · up to 8 MB. The receipt link appears only in your account.</p>
+                      {receiptFile && <p className="mt-2 flex items-center gap-1.5 text-[12px] font-medium text-green-700"><FileText className="w-3.5 h-3.5" />{receiptFile.name}</p>}
+                    </div>
+                  </div>
+
                   <div className="rounded-2xl border border-zinc-100 overflow-hidden">
                     {[
                       { label: "Product",   value: form.product   },
@@ -560,7 +599,7 @@ export default function ContributePage() {
                 ) : (
                   <button
                     onClick={submit}
-                    disabled={saving}
+                    disabled={saving || (!user)}
                     className="flex items-center gap-2 btn-green text-[14px] px-6 py-2.5 rounded-xl disabled:opacity-60"
                   >
                     {saving ? (

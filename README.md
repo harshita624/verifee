@@ -1,200 +1,125 @@
-# Verifee
+# Verifee: know the fair price before you pay
 
-**AI-Powered Price Intelligence & Protection Platform**
+Verifee protects travelers in India from tourist pricing. This version adds **PayPal checkout**, **UPI QR payments** and an **AI Pay Guard** that checks a price *before* money moves.
 
-Verifee is a full-stack tourist price-protection platform that combines machine learning, retrieval-augmented generation (RAG), NLP, and multiple LLM providers to help users understand whether a price is reasonable — and get grounded, explainable, source-attributed answers instead of a plausible-sounding guess.
+Built for the *Build What's Next with PayPal and AI* hackathon.
 
-**Live:** https://verifee-ixi8-zeta.vercel.app
+## What PayPal and AI do here
 
----
-
-## At a Glance
-
-| | |
-|---|---|
-| Retrieval | TF-IDF + cosine similarity over community-verified receipts |
-| Anomaly detection | Z-score + IQR |
-| Forecasting | Linear regression on historical price data |
-| NLP | 7-intent classification, NER, anaphora resolution, Hindi-English mixed input |
-| LLM providers | Groq, OpenAI, Gemini, Ollama — behind one inference interface |
-| Auth | JWT + Google OAuth, tiered rate limiting |
-
----
-
-## What Verifee Does
-
-Verifee brings together community-verified receipt data, statistical analysis, price forecasting, and AI-powered conversation into a single platform.
-
-The system can:
-
-- Retrieve semantically similar historical receipts
-- Detect unusual or potentially inflated prices
-- Forecast price trends
-- Ground AI responses in verified receipt data
-- Classify user queries into one of seven intents
-- Extract entities from natural-language queries
-- Maintain session-aware conversational context, including anaphora resolution
-- Handle Hindi-English mixed queries
-- Show whether a response is based on community-verified data or an AI estimate
-
-## Why Verifee?
-
-Traditional AI assistants can generate plausible answers without showing where the information came from. Verifee takes a different approach:
-
-**Retrieve → Analyze → Ground → Explain**
-
-Instead of relying solely on an LLM, Verifee combines real receipt data, statistical analysis, ML forecasting, and RAG to produce transparent, source-attributed price intelligence.
-
-## Key Features
-
-### AI & RAG
-- Retrieval-Augmented Generation using community-verified MongoDB receipt data
-- Unified inference layer supporting Groq, OpenAI, Gemini, and Ollama interchangeably
-- Responses include data-source confidence/provenance indicators
-- Session-aware context tracking and anaphora resolution
-
-### Machine Learning
-On-server ML pipeline with no external ML API dependency for statistical processing:
-- **TF-IDF + Cosine Similarity** — semantic receipt retrieval
-- **Z-score + IQR** — statistical price anomaly detection
-- **Linear Regression** — price-trend forecasting
-
-### NLP Pipeline
-- 7-intent classification
-- Named Entity Recognition (NER)
-- Query normalization
-- Session-aware context + anaphora resolution
-- Hindi-English mixed-input handling
-
-### Security
-- JWT authentication
-- Google OAuth
-- Tiered rate limiting
-- Unified backend inference abstraction
+| Feature | PayPal | AI |
+|---|---|---|
+| **Fair Pay** (`/pay`) | Buyer pays with PayPal / card. The server creates and captures the order (Orders v2) and verifies the captured amount. | **AI Pay Guard** compares the vendor's quote with verified community prices or an AI estimate, writes a counter-offer script, and returns a signed token. **PayPal order creation is refused without that token**, and the token is bound to the exact amount. |
+| **Data flywheel** | A captured Fair Pay payment automatically becomes a *verified* community price report (+80 XP). | Verified reports feed the RAG + anomaly-detection pipeline that powers every other AI answer. |
+| **Verifee Pro** (`/pricing`) | Monthly / yearly plan via PayPal. A webhook reconciles completed and refunded payments. | Free users get 3 premium AI actions per day; Pro is unlimited. |
+| **UPI QR (India)** | n/a | Scan the vendor's UPI QR → AI check → pay by UPI. Pro can also be bought by UPI QR. |
 
 ## Architecture
-                ┌──────────────────────┐
-                │       Frontend       │
-                │      Next.js         │
-                └──────────┬───────────┘
-                           │
-                           ▼
-                ┌──────────────────────┐
-                │      Express API     │
-                │ Authentication/RL    │
-                └──────────┬───────────┘
-                           │
-            ┌──────────────┼──────────────┐
-            │              │              │
-            ▼              ▼              ▼
-    ┌─────────────┐ ┌─────────────┐ ┌──────────────┐
-    │ MongoDB     │ │ ML Pipeline │ │ NLP Pipeline │
-    │ Receipts    │ │ TF-IDF      │ │ Intent       │
-    │             │ │ Z/IQR       │ │ NER          │
-    │             │ │ Regression  │ │ Context      │
-    └──────┬──────┘ └─────────────┘ └──────────────┘
-           │
-           ▼
-    ┌─────────────────────┐
-    │       RAG Layer     │
-    │ Verified Receipts   │
-    └──────────┬──────────┘
-               │
-               ▼
-    ┌─────────────────────┐
-    │ Inference Abstraction│
-    └──────────┬──────────┘
-               │
-    ┌──────────┼───────────┬──────────┐
-    ▼          ▼           ▼          ▼
-  Groq       OpenAI      Gemini     Ollama
-  
-## ML & AI Pipeline
 
-1. **Query Understanding** — normalize the request, classify into one of 7 intents, extract named entities.
-2. **Semantic Retrieval** — TF-IDF vectors + cosine similarity find relevant community-verified receipts.
-3. **Price Analysis** — Z-score and IQR flag prices that deviate significantly from observed data.
-4. **Price Forecasting** — linear regression estimates price trends from historical data.
-5. **RAG Response** — retrieved receipt data is passed into the RAG pipeline so the LLM's answer is grounded in real evidence.
-6. **Provenance** — every answer is tagged as either community-verified or an AI estimate, so the user always knows which.
+```
+client/  Next.js (App Router) + Tailwind        → deploy on Vercel
+server/  Express + MongoDB (Mongoose)            → deploy on Render
+         ├─ services/paypalService.js   PayPal REST v2 (OAuth, create/capture, webhook verify)
+         ├─ controllers/paymentController.js   Pay Guard, PayPal, UPI, history, admin review
+         ├─ middleware/planGate.js      free-tier quota for premium AI routes
+         ├─ services/{aiService,mlService,ragService,nlpService}.js   AI + ML pipeline
+```
 
-## Tech Stack
+## 1. Prerequisites
 
-**Frontend:** Next.js
-**Backend:** Express.js, Node.js
-**Database:** MongoDB
-**AI / ML:** Python, TF-IDF, Cosine Similarity, Z-score, IQR anomaly detection, Linear Regression, RAG, Prompt Engineering
-**LLM Providers:** Groq / Llama, OpenAI, Gemini, Ollama
-**Auth & Security:** JWT, Google OAuth, Rate Limiting
+- Node.js **18 or newer** (the server uses the built-in `fetch`)
+- A MongoDB database (free MongoDB Atlas cluster is fine)
+- A PayPal developer account (free)
+- An AI key (Groq free tier is the default)
 
-## Getting Started
+## 2. Get your keys
 
-> These are standard steps for this stack — adjust variable names to whatever your actual `.env` files use.
+| Variable | Where to get it |
+|---|---|
+| `MONGO_URI` | <https://cloud.mongodb.com> → create a free cluster → **Connect → Drivers** → copy the string, put your DB user/password in it. In Atlas **Network Access**, allow your IP (or `0.0.0.0/0` for a hosted API). |
+| `JWT_SECRET` | Run `node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"` and paste the output. |
+| `GROQ_API_KEY` | <https://console.groq.com/keys> |
+| `PAYPAL_CLIENT_ID` / `PAYPAL_CLIENT_SECRET` | <https://developer.paypal.com/dashboard> → sign in → **Apps & Credentials** → switch to **Sandbox** → **Create App** (type *Merchant*) → copy **Client ID** and **Secret**. |
+| PayPal test buyer | Same dashboard → **Testing Tools → Sandbox Accounts**. Use a **Personal** sandbox account's email/password to pay at checkout. |
+| `PAYPAL_WEBHOOK_ID` (optional) | Dashboard → your sandbox app → **Webhooks → Add Webhook**. URL: `https://<your-api>/api/v1/payments/paypal/webhook`. Events: `PAYMENT.CAPTURE.COMPLETED`, `PAYMENT.CAPTURE.REFUNDED`, `PAYMENT.CAPTURE.REVERSED`. Copy the **Webhook ID**. Needs a public URL (deploy first, or use a tunnel). |
+| `UPI_MERCHANT_VPA` | Your own UPI ID (for example `name@okhdfcbank`), shown in the QR when someone buys Pro by UPI. |
+| `RESEND_API_KEY` (optional) | <https://resend.com/api-keys>. Without it, password-reset links are printed in the server console in development. |
 
-### Prerequisites
-- Node.js 18+
-- Python 3.10+
-- MongoDB (local or Atlas)
-- At least one LLM provider API key (Groq, OpenAI, or Gemini) — or a local Ollama install
+## 3. Install and run
 
-### 1. Clone and install
 ```bash
-git clone https://github.com/harshita624/verifee.git
-cd verifee
+# 1. Server
+cd server
+npm install
+cp .env.example .env        # then fill in the values from the table above
+npm run dev                 # or: node server.js        → http://localhost:5000
 
-# Backend
-cd backend && npm install
-
-# Frontend
-cd ../frontend && npm install
-
-# ML pipeline
-cd ../ml && pip install -r requirements.txt --break-system-packages
+# 2. Client (new terminal)
+cd client
+npm install
+npm install qrcode jsqr     # NEW dependencies for QR display + scanning
+cp .env.local.example .env.local
+npm run dev                 # → http://localhost:3000
 ```
 
-### 2. Environment variables
+Check the API: open <http://localhost:5000/health>. It should show `"paypal": true` and `"upi": true`.
 
-Backend `.env`:
-```env
-MONGO_URI=mongodb+srv://USER:PASSWORD@CLUSTER/verifee
-JWT_SECRET=long-random-secret
-GOOGLE_CLIENT_ID=your-google-oauth-client-id
-GOOGLE_CLIENT_SECRET=your-google-oauth-client-secret
-GROQ_API_KEY=optional
-OPENAI_API_KEY=optional
-GEMINI_API_KEY=optional
-OLLAMA_BASE_URL=http://localhost:11434
-```
+## 4. Test the payments (sandbox)
 
-Frontend `.env.local`:
-```env
-NEXT_PUBLIC_API_URL=/api
-```
+1. Sign up on the site, then open **/pricing** → **PayPal / Card** → pay with your **sandbox Personal** account. Pro activates and a **PRO** badge appears in the navbar.
+2. Open **/pay**, enter a product, city and price, and press **Check with AI Pay Guard**. Then pay by PayPal. A verified community price report is created and you earn +80 XP.
+3. **UPI QR:** on **/pay**, enter any valid UPI ID (for example `test@okaxis`) to generate a payment QR, and scan it with a UPI app on your phone. On **/pricing → UPI QR** the Pro purchase is *pending* until an admin approves it:
+   - Make yourself admin: in MongoDB set your user's `role` to `"admin"`.
+   - `GET /api/v1/payments/admin/upi/pending` and `PATCH /api/v1/payments/admin/upi/:id` with `{"action":"approve"}` (send your `Authorization: Bearer <token>`).
 
-### 3. Run locally
-```bash
-# Backend
-cd backend && npm run dev
+## 5. Deploy
 
-# Frontend (separate terminal)
-cd frontend && npm run dev
-```
+- **Server (Render):** set every variable from `server/.env.example` in the Render dashboard. Set `FRONTEND_URL` to your Vercel URL and `NODE_ENV=production`.
+- **Client (Vercel):** set `NEXT_PUBLIC_API_URL` to your Render URL.
+- For real money: create a **Live** PayPal app, set `PAYPAL_ENV=live` with the live credentials (PayPal must approve your business account first).
 
-Open http://localhost:3000.
+## 6. API (payments)
 
-## Project Highlights
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| GET | `/api/v1/payments/config` | none | Plans, PayPal client ID, UPI availability |
+| POST | `/api/v1/payments/guard` | optional | AI Pay Guard verdict + signed token (quota-limited for free users) |
+| POST | `/api/v1/payments/paypal/create-order` | user | Create PayPal order (`pro_plan` or `fair_pay`) |
+| POST | `/api/v1/payments/paypal/capture-order` | user | Capture + verify amount + fulfil |
+| POST | `/api/v1/payments/paypal/webhook` | PayPal | Signature-verified reconciliation |
+| POST | `/api/v1/payments/upi/create` | user | UPI deep link / QR for a Pro plan |
+| POST | `/api/v1/payments/upi/submit` | user | Submit 12-digit UTR (pending review) |
+| GET | `/api/v1/payments/mine` | user | Payment history |
+| GET/PATCH | `/api/v1/payments/admin/upi/...` | admin | Review UPI payments |
 
-- Production-deployed full-stack application
-- Four interchangeable LLM providers behind a single inference interface
-- On-server ML pipeline — no external ML API dependency for statistical analysis
-- RAG grounded in community-verified data, with explicit provenance tracking
-- Multilingual NLP support for Hindi-English mixed queries
-- Authentication, OAuth, and rate limiting integrated end-to-end
+## 6b. Payment records, purpose and cancellations
 
-## Author
+Every PayPal checkout creates a `Payment` record the moment the order is created, so even a cancelled or abandoned checkout leaves a trace.
 
-**Harshita Sharma**
-B.Tech — Computer Science & Engineering, KIIT University
+| Field | Meaning |
+|---|---|
+| `paypalOrderId`, `paypalCaptureId` | PayPal's identifiers |
+| `amount`, `currency`, `amountInr` | What was charged |
+| `status` | `created` → `captured`, or `cancelled`, `failed`, `refunded` |
+| `capturedAt`, `fulfilledAt` | PayPal's capture time, and when we applied it |
+| `purpose` | Fair Pay: chosen by the buyer (transport, food, shopping, accommodation, other). Pro: always `premium` |
+| `cancel.reason`, `cancel.note` | Why the buyer closed checkout (`skipped` if they did not answer) |
+| `refund.id`, `refund.at` | Set by the refund webhook |
+| `events[]` | Audit log of webhook events, deduplicated by event id |
 
-- GitHub: https://github.com/harshita624
-- LinkedIn: https://www.linkedin.com/in/harshita-sharma-b782942a7/
+Webhook events handled: `PAYMENT.CAPTURE.COMPLETED`, `.PENDING`, `.DENIED`, `.REFUNDED`, `.REVERSED`. Subscribe your PayPal webhook to all five. Webhooks need a public URL, so they only fire against a deployed API (or a tunnel such as ngrok). The PayPal dashboard's webhook simulator sends fake order IDs that match nothing in your database, so test with a real sandbox payment instead.
+
+Admin insights: `GET /api/v1/payments/admin/insights` returns payments by status, captured totals per purpose, cancellation reasons, checkouts abandoned without any reason, and PayPal conversion.
+
+Only an explicit cancel can record a reason. A buyer who simply closes the tab never reaches the server, so those checkouts show up as `abandonedNoReason` in the insights instead.
+
+## 7. Honest limitations
+
+- **Fair Pay with PayPal** charges the buyer on the platform's merchant account. Paying the *vendor* out of that balance (PayPal Payouts or Multiparty/Commerce Platform onboarding) is not built; it requires vendor onboarding and approval from PayPal.
+- **UPI** has no server callback without a payment aggregator, so Pro-by-UPI is manually confirmed. Fair Pay by UPI goes straight from the buyer to the vendor and Verifee never touches it.
+- PayPal charges in **USD** by default (₹ amounts are converted with `INR_PER_USD`).
+- The camera scanner needs HTTPS (or `localhost`); a screenshot upload fallback is included.
+- The Receipt Verifier needs `AI_PROVIDER=openai` (vision); otherwise it returns an empty result.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

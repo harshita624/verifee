@@ -9,7 +9,7 @@
  * Now:
  *   1. ONE prompt produces the estimate, with temperature 0.
  *   2. The estimate is cached (MongoDB, 24h) so every feature reuses it.
- *   3. Community data (3+ verified receipts) always wins over the AI estimate.
+ *   3. Community data (3+ verified price reports) always wins over the AI estimate.
  *   4. The verdict / scam probability is computed from numbers, never by the LLM.
  *   5. "Start bargaining" and "Target" are derived from the range, so the
  *      opening offer can never end up higher than the target again.
@@ -19,6 +19,7 @@ const mlService = require("./mlService");
 const EstimateCache = require("../models/EstimateCache");
 const ScamReport = require("../models/ScamReport");
 const { escapeRegex } = require("../utils/regex");
+const { normalizeProductName, productNameRegex } = require("../utils/productName");
 
 const TTL_MS = (Number(process.env.ESTIMATE_CACHE_HOURS) || 24) * 60 * 60 * 1000;
 const MIN_COMMUNITY_REPORTS = 3;
@@ -62,7 +63,7 @@ function splitProduct(rawProduct, rawPlace) {
 }
 
 const cacheKey = ({ product, city, place, category }) =>
-  ["v1", product, city, place, category]
+  ["v3", product, city, place, category]
     .map((s) => squash(s).toLowerCase())
     .join("|")
     .slice(0, 300);
@@ -95,6 +96,7 @@ Give prices SPECIFIC to the city and market provided:
 - Mumbai prices are typically 25-40% higher than Delhi.
 - Jaipur, Varanasi and Agra are typically 10-25% cheaper than Delhi.
 - Tourist-hotspot markets are 30-80% more expensive than neighbourhood bazaars.
+- Treat "auto ride", "rickshaw ride" and "auto-rickshaw ride" as the same service. Assume a short, standard in-city trip and do not change the estimate just because a market/vendor area was selected; route distance affects the actual fare.
 If the item name is vague, assume the most common mid-range version a tourist would buy.
 Return ONLY valid JSON. No markdown, no code fences.`;
 
@@ -180,14 +182,16 @@ async function getProfile(ctx) {
 // ── Public API ───────────────────────────────────────────────────────────────
 
 /**
- * Returns a normalised estimate. Community data (3+ verified receipts) wins;
+ * Returns a normalised estimate. Community data (3+ verified price reports) wins;
  * otherwise the cached AI estimate is used.
  */
 async function estimate({ product, city = "", place = "", category = "" }) {
   const split = splitProduct(product, place);
+  const canonicalProduct = normalizeProductName(split.product);
+  const isAutoRide = canonicalProduct.toLowerCase() === "auto rickshaw ride";
   const ctx = {
-    product: split.product,
-    place: split.place,
+    product: canonicalProduct,
+    place: isAutoRide ? "" : split.place,
     city: squash(city),
     category: squash(category).slice(0, 40),
   };
@@ -242,6 +246,7 @@ async function estimate({ product, city = "", place = "", category = "" }) {
     seasonalNote = `Prices are rising, so buy soon (about ₹${Math.abs(usableTrend.monthlyChange || 0).toLocaleString("en-IN")} more per month).`;
   else if (usableTrend?.trend === "Falling")
     seasonalNote = "Prices are falling, so you have negotiating power.";
+  if (isAutoRide) seasonalNote = "";
 
   const broad = fairMax / Math.max(fairMin, 1) > 2.2;
 
@@ -254,21 +259,27 @@ async function estimate({ product, city = "", place = "", category = "" }) {
     median,
     mean,
     std,
-    onlineAvg: profile?.onlineAvg ?? null,
-    touristPremium,
+    onlineAvg: isAutoRide ? null : profile?.onlineAvg ?? null,
+    touristPremium: isAutoRide ? 0 : touristPremium,
     // Derived, so the opening offer is always BELOW the target, which is below the top of the range.
     bargainingStart: niceRound(fairMin * 0.85),
     bargainingTarget: niceRound(fairMin + 0.35 * (fairMax - fairMin)),
     confidence,
     dataSource,
     dataPoints,
-    trend: usableTrend?.trend || profile?.trend || "Stable",
-    bestTimeToBuy: profile?.bestTimeToBuy || "",
-    aiRecommendation: profile?.aiRecommendation || "",
-    scamWarning: profile?.scamWarning || "",
+    trend: isAutoRide ? "Route dependent" : usableTrend?.trend || profile?.trend || "Stable",
+    bestTimeToBuy: isAutoRide ? "" : profile?.bestTimeToBuy || "",
+    aiRecommendation: isAutoRide
+      ? "Confirm the pickup and destination, then agree on the fare or check that the meter is running before departure."
+      : profile?.aiRecommendation || "",
+    scamWarning: isAutoRide
+      ? "This estimate assumes a short in-city trip. Longer routes and traffic can change the fare."
+      : profile?.scamWarning || "",
     seasonalNote,
     broad,
-    hint: broad
+    hint: isAutoRide
+      ? "A route-specific fare needs pickup and destination details."
+      : broad
       ? "This range is wide because the item is vague. Add size, material or quality for a tighter estimate."
       : "",
   };
@@ -318,7 +329,7 @@ function judge(price, est, scamHistory = 0) {
 async function scamHistoryCount(product, city) {
   try {
     const n = await ScamReport.countDocuments({
-      product: new RegExp(escapeRegex(product), "i"),
+      product: productNameRegex(product),
       ...(city && { city: new RegExp(escapeRegex(city), "i") }),
     });
     return Math.min(n, 5);

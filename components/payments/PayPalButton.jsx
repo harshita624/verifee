@@ -31,7 +31,7 @@ function loadSdk(clientId, currency) {
  *  clientId, currency        from GET /payments/config
  *  createOrder()             → Promise<orderId>   (calls our server)
  *  onApproved(orderId)       → called after the buyer approves; capture on the server here
- *  onError(err), onCancel()
+ *  onError(err), onCancel(orderId)
  *  disabled                  greys the button out and blocks checkout
  */
 export default function PayPalButton({
@@ -62,7 +62,7 @@ export default function PayPalButton({
           onClick: (data, actions) => (cb.current.disabled ? actions.reject() : actions.resolve()),
           createOrder: () => cb.current.createOrder(),
           onApprove: (data) => cb.current.onApproved(data.orderID),
-          onCancel: () => cb.current.onCancel?.(),
+          onCancel: (data) => cb.current.onCancel?.(data?.orderID),
           onError: (err) => cb.current.onError?.(err),
         });
         if (!buttons.isEligible()) {

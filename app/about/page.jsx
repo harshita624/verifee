@@ -56,9 +56,9 @@ export default function AboutPage() {
 
       <Section title="Where our prices come from">
         <P>
-          When at least three verified community receipts exist for an item in a city, the fair
-          range comes from those receipts and the verdict uses a statistical Z-score. When there is
-          not enough community data, the range is an AI estimate and is labeled “AI estimate” with a
+          When at least three verified community price reports exist for an item in a city, the fair
+          range comes from those receipts and the verdict compares a quote with what local buyers
+          typically paid. When there is not enough community data, the range is an AI estimate and is labeled “AI estimate” with a
           confidence score.
         </P>
         <P>
@@ -77,7 +77,7 @@ export default function AboutPage() {
 
       <Section title="Help make it better">
         <P>
-          Every verified receipt makes the next traveler’s answer more accurate. Share what you paid,
+          Every verified price report makes the next traveler’s answer more accurate. Share what you paid,
           report an overcharge, or tell us what is missing.
         </P>
         <div className="flex flex-wrap gap-2.5 mt-4">

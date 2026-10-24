@@ -9,7 +9,9 @@ const MEDALS = ["🥇", "🥈", "🥉"];
 
 export default function CommunityPage() {
   const [leaders, setLeaders] = useState([]);
+  const [contributions, setContributions] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [contributionsLoading, setContributionsLoading] = useState(true);
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
@@ -23,11 +25,19 @@ export default function CommunityPage() {
       .finally(() => setLoading(false));
   }, []);
 
+  useEffect(() => {
+    fetch(`${API_BASE}/api/v1/prices?limit=10`)
+      .then((r) => r.json())
+      .then((d) => { if (d.success) setContributions(d.data || []); })
+      .catch(() => {})
+      .finally(() => setContributionsLoading(false));
+  }, []);
+
   return (
     <StaticPage
       eyebrow="Community"
       title="Prices from people who paid them"
-      intro="Verifee gets more accurate with every verified receipt. Here are the people making it so."
+      intro="Verifee gets more accurate with every verified price report. Here are the people contributing them."
     >
       <Section title="Top contributors">
         <Card className="p-3">
@@ -69,6 +79,29 @@ export default function CommunityPage() {
               ))}
             </div>
           )}
+        </Card>
+      </Section>
+
+      <Section title="Recent community prices">
+        <Card className="divide-y divide-zinc-100">
+          {contributionsLoading ? (
+            <div className="py-10 flex justify-center"><Loader2 className="w-5 h-5 text-green-600 animate-spin" /></div>
+          ) : contributions.length === 0 ? (
+            <p className="text-[13px] text-zinc-500 text-center py-8">No price contributions have been shared yet.</p>
+          ) : contributions.map((report) => (
+            <div key={report._id} className="flex items-center gap-3 px-4 py-3">
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-[13px] font-semibold text-zinc-900">{report.product}</p>
+                <p className="truncate text-[11px] text-zinc-500">
+                  {report.city}{report.marketName ? ` · ${report.marketName}` : ""} · {report.submittedBy?.name || "Community member"}
+                </p>
+              </div>
+              <div className="shrink-0 text-right">
+                <p className="text-[13px] font-bold text-green-700">₹{Number(report.pricePaid || 0).toLocaleString("en-IN")}</p>
+                <p className="text-[10px] text-zinc-400">{report.isVerified ? "Verified" : "Shared"}</p>
+              </div>
+            </div>
+          ))}
         </Card>
       </Section>
 

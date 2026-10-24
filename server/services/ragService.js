@@ -39,7 +39,7 @@ async function buildContext(product, city, offeredPrice) {
   // Statistical analysis
   if (distribution && distribution.count > 0) {
     lines.push("=== STATISTICAL ANALYSIS ===");
-    lines.push(`${distribution.count} verified receipts:`);
+    lines.push(`${distribution.count} verified community price reports:`);
     lines.push(`- Median: ₹${distribution.median?.toLocaleString()}`);
     lines.push(`- Mean: ₹${distribution.mean?.toLocaleString()} ±₹${distribution.std?.toLocaleString()}`);
     lines.push(`- Good deal: under ₹${distribution.p25?.toLocaleString()}`);
@@ -55,11 +55,11 @@ async function buildContext(product, city, offeredPrice) {
     if (anomaly.hasEnoughData) {
       if (anomaly.isAnomaly) {
         lines.push("PRICE IS STATISTICALLY ANOMALOUS:");
-        lines.push(`- Z-score: ${anomaly.zScore} (>2.0 = suspicious)`);
+        lines.push(`- The quoted price is well above the usual range: ${anomaly.overchargePercent}% above the community average`);
         lines.push(`- Overcharge: ${anomaly.overchargePercent}% above community average`);
         lines.push(`- Severity: ${anomaly.severity}`);
       } else {
-        lines.push(`Price is within normal range (Z-score: ${anomaly.zScore})`);
+        lines.push("Price is within the usual community range");
         lines.push(
           `${anomaly.overchargePercent > 0
             ? anomaly.overchargePercent + "% above"
@@ -112,7 +112,7 @@ function buildGroundedPrompt(userMessage, ragContext, nlpResult, sessionCtx) {
 RULES:
 - Ground your answer in the VERIFIED COMMUNITY DATA below if available
 - When real data exists, cite it: "Based on X verified purchases..."
-- State the Z-score finding in plain English when it flags an anomaly
+- Explain whether the quote is above or within the usual price range in everyday language; do not mention internal statistical methods
 - Give specific INR amounts
 - Be direct — the user may be standing in a market right now
 - Never say "I think" — use the data or say honestly there isn't enough

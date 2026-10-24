@@ -2,6 +2,7 @@ const express      = require("express");
 const aiController = require("../controllers/aiController");
 const aiService     = require("../services/aiService");
 const { protect }  = require("../middleware/auth");
+const { extractLastPrice, safeLiveReply } = require("../utils/bargainOffer");
 
 const router = express.Router();
 
@@ -203,10 +204,19 @@ router.post("/bargain-reply", async (req, res) => {
       gu:"Gujarati",pa:"Punjabi",or:"Odia",en:"English",
     };
 
+    const sellerPrice = extractLastPrice(sellerSaid);
+    if (sellerPrice !== null) {
+      return res.json({
+        success: true,
+        data: safeLiveReply({ sellerPrice, targetPrice: context?.targetPrice, lang }),
+      });
+    }
+
     const system = `Real-time bargaining coach. Tourist is in front of seller NOW. Return ONLY valid JSON.`;
     const prompt = `Product: ${product||"item"}, City: ${city||"India"}.
 Seller said: "${sellerSaid.trim()}"
 Target: ${context?.targetPrice?"₹"+context.targetPrice:"unknown"}
+Never recommend paying more than the seller's stated amount or the target. If their amount is at or below the target, recommend accepting it without raising the price. Do not suggest a higher amount, even as a strategy.
 
 Return JSON:
 {

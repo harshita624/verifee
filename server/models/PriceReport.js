@@ -18,6 +18,7 @@ const priceReportSchema = new mongoose.Schema({
 
   images: [{ type: String }],
   receiptUrl: { type: String },
+  receiptAssetId: { type: mongoose.Schema.Types.ObjectId, ref: "ReceiptAsset" },
   ocrData: {
     extractedProduct: String,
     extractedAmount: Number,

@@ -6,7 +6,7 @@ import { Plus, Minus } from "lucide-react";
 const FAQS = [
   {
     q: "How does Verifee know the real local price?",
-    a: "Verifee combines three sources: (1) community-submitted prices from real buyers with photo receipts, (2) AI trained on Indian market data, and (3) historical price trends. The confidence score tells you how reliable each estimate is.",
+    a: "Verifee uses an AI estimate until at least three verified price reports match the product and city. Then the price range is calculated from those reports. Uploaded receipts are stored with a contribution, but are not currently read automatically to fill in or verify its price.",
   },
   {
     q: "Is Verifee free to use?",
@@ -14,11 +14,11 @@ const FAQS = [
   },
   {
     q: "Which cities are covered?",
-    a: "We currently cover 1,200+ markets across 180+ Indian cities including Delhi, Mumbai, Jaipur, Agra, Varanasi, Goa, Kerala, Hyderabad, Bangalore, and all major tourist destinations.",
+    a: "You can request a price estimate for a city in India. Community-based ranges appear when at least three verified reports match that product and city; otherwise, Verifee shows an AI estimate.",
   },
   {
     q: "Can I trust the community prices?",
-    a: "Every submitted price goes through AI verification and is cross-referenced with OCR receipt scanning. Contributors with verified buyer badges and higher reputation scores carry more weight in our pricing algorithm.",
+    a: "Reports are checked for price plausibility before they count toward community estimates. The estimate shows how many verified reports it used. Compare that range with the item's quality, route, or other details before deciding.",
   },
   {
     q: "How does the scam detector work?",
@@ -30,7 +30,7 @@ const FAQS = [
   },
   {
     q: "How do I contribute prices?",
-    a: "After buying something, click 'Contribute' and upload your receipt or bill. Our OCR automatically extracts the product, price, date, and shop. You earn XP and badges for every verified contribution.",
+    a: "Open Contribute and enter the product, price paid, and city. You can attach a receipt, but its details are not automatically extracted. Plausible reports are marked verified and used in community estimates; other reports are saved for review.",
   },
 ];
 

@@ -18,9 +18,10 @@ const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
 function PriceResult({ result }) {
   if (!result) return null;
 
+  const routeEstimate = result.product?.toLowerCase() === "auto rickshaw ride";
   const overcharge = result.touristPremium || 0;
   const riskColor  = overcharge >= 60 ? "#dc2626" : overcharge >= 30 ? "#f59e0b" : "#16a34a";
-  const riskLabel  = overcharge >= 60 ? "High tourist premium"
+  const riskLabel  = routeEstimate ? "Route-dependent estimate" : overcharge >= 60 ? "High tourist premium"
     : overcharge >= 30 ? "Moderate premium" : "Fair pricing";
 
   return (
@@ -60,7 +61,7 @@ function PriceResult({ result }) {
                 style={{ background: "#f0fdf4", color: "#16a34a", border: "1px solid #dcfce7" }}
               >
                 <CheckCircle className="w-3 h-3" />
-                {result.dataPoints} verified community receipts
+                {result.dataPoints} verified community price reports
               </span>
             ) : (
               <span
@@ -84,9 +85,10 @@ function PriceResult({ result }) {
                 className="text-[11px] font-semibold px-2.5 py-1 rounded-full"
                 style={{ background: `${riskColor}10`, color: riskColor }}
               >
-                {riskLabel} (+{overcharge}%)
+                {riskLabel}{!routeEstimate && ` (+${overcharge}%)`}
               </span>
             </div>
+            {result.hint && <p className="mt-2 text-[12px] text-zinc-500">{result.hint}</p>}
           </div>
 
           {/* Stats grid */}

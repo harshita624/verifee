@@ -32,10 +32,10 @@ const VS_ITEMS = [
 ];
 
 const UNIQUE_STATS = [
-  { label: "Community price reports",   value: "2.4M+",  sub: "From real buyers with receipts"       },
-  { label: "Not on any e-commerce site",value: "100%",   sub: "We only track physical market prices"  },
-  { label: "Languages for bargaining",  value: "11",     sub: "With pronunciation guides"             },
-  { label: "Cities with trusted shops", value: "180+",   sub: "Scored by locals, verified by AI"      },
+  { label: "Community threshold", value: "3+", sub: "Verified reports for a shared range" },
+  { label: "Languages", value: "11", sub: "For bargaining and translation" },
+  { label: "Estimate cache", value: "24h", sub: "Shared across pricing screens" },
+  { label: "Price sources", value: "2", sub: "AI estimates and community reports" },
 ];
 
 export default function WhyVerifee() {

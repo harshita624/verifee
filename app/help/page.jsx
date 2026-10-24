@@ -9,7 +9,7 @@ const GROUPS = [
     items: [
       {
         q: "How does Verifee know the fair price?",
-        a: "When at least three verified community receipts exist for an item in a city, the range comes from those receipts. Otherwise it is an AI estimate, clearly labeled with a confidence score. Estimates are saved for 24 hours so every page shows the same numbers.",
+        a: "When at least three verified community price reports exist for an item in a city, the range comes from those reports. Otherwise it is an AI estimate, clearly labeled with a confidence score. Estimates are saved for 24 hours so every page shows the same numbers.",
       },
       {
         q: "What does “AI estimate” mean?",
@@ -21,7 +21,7 @@ const GROUPS = [
       },
       {
         q: "How is the scam probability calculated?",
-        a: "From numbers, not guesswork. With community data it uses a Z-score. With an AI estimate it uses where your quote sits against the fair range. Prices inside the range score as fair, and the score climbs as the quote goes above the top of the range.",
+        a: "It compares your quote with verified prices paid by other shoppers when those are available. If there is not enough community data, it compares your quote with an estimated fair-price range. Quotes inside the range are treated as fair, and risk rises as the quote moves above it.",
       },
       {
         q: "Which languages does the translator support?",

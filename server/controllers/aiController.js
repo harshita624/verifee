@@ -2,6 +2,7 @@ const aiService  = require("../services/aiService");
 const nlpService = require("../services/nlpService");
 const ragService = require("../services/ragService");
 const priceEngine = require("../services/priceEngine");
+const { extractLastPrice, safeLiveReply } = require("../utils/bargainOffer");
 
 const fail = (res, err, tag) => {
   console.error(`${tag}:`, err.message);
@@ -82,34 +83,40 @@ exports.detectScam = async (req, res) => {
     const est = a.est;
     const fmt = (n) => Number(n).toLocaleString("en-IN");
 
-    let negotiationScript =
-      `Say: "The usual price for this is around ₹${fmt(est.fairMax)}. I'll pay ₹${fmt(est.bargainingTarget)}."`;
+    let negotiationScript = "";
     let walkAwayAdvice =
       a.scamProbability >= 60 ? "Walk away. You can find better prices nearby." : "Try negotiating before you decide.";
     let alternatives = [];
 
-    try {
+    if (price <= est.bargainingTarget) {
+      negotiationScript = safeLiveReply({ sellerPrice: price, targetPrice: est.bargainingTarget, lang: "en" }).say;
+      if (price < est.fairMin) walkAwayAdvice = "This quote is below the estimate. Confirm the full fare and route before accepting.";
+    } else try {
       const raw = await aiService.callAIRaw(
         `Product: "${est.product}". Location: ${resolvedPlace || resolvedCity || "India"}.\n` +
           `Quoted: ₹${price}. Fair range: ₹${est.fairMin}–₹${est.fairMax} ` +
-          `(${est.dataSource === "community_verified" ? `${est.dataPoints} verified community receipts` : "AI estimate"}). ` +
+          `(${est.dataSource === "community_verified" ? `${est.dataPoints} verified community price reports` : "AI estimate"}). ` +
+          `The seller is asking ₹${price}; never tell the buyer to offer more than this. Their maximum target is ₹${est.bargainingTarget}. Counter at or below that target.\n` +
           `Verdict: ${a.verdict}.\n` +
           `Return JSON: {"say":"<one sentence to say to the seller right now>","walkAway":"<one sentence: should they walk away>","alternatives":["<better place nearby 1>","<better place nearby 2>"]}`,
         "You coach tourists bargaining in Indian markets. Return ONLY valid JSON. No emojis.",
         { maxTokens: 700, temperature: 0.2, timeoutMs: 20000, json: true }
       );
       const r = aiService.parseJSON(raw, { requiredFields: ["say"] });
-      negotiationScript = String(r.say).slice(0, 300);
+      const saidPrice = extractLastPrice(r.say);
+      negotiationScript = saidPrice !== null && saidPrice <= Math.min(price, est.bargainingTarget)
+        ? String(r.say).slice(0, 300)
+        : safeLiveReply({ sellerPrice: price, targetPrice: est.bargainingTarget, lang: "en" }).say;
       if (r.walkAway) walkAwayAdvice = String(r.walkAway).slice(0, 300);
       if (Array.isArray(r.alternatives)) alternatives = r.alternatives.map((s) => String(s).slice(0, 120)).slice(0, 3);
     } catch (e) {
       console.warn("detectScam: script generation failed, using fallback:", e.message);
+      negotiationScript = safeLiveReply({ sellerPrice: price, targetPrice: est.bargainingTarget, lang: "en" }).say;
     }
 
     const community = est.dataSource === "community_verified";
     const explanation = community
-      ? `Statistical analysis of ${est.dataPoints} community receipts` +
-        `${a.zScore !== null ? `: Z-score ${a.zScore.toFixed(1)}` : ""}. Typical buyer pays ₹${fmt(Math.round(est.mean))}.`
+      ? `Compared with ${est.dataPoints} verified community price reports, this quote is ${a.zScore > 2 ? "well above what most buyers paid" : "within the range most buyers paid"}. Typical buyer pays about ₹${fmt(Math.round(est.mean))}.`
       : `Limited community data. AI estimate of ₹${fmt(est.fairMin)}–₹${fmt(est.fairMax)} for this market. ` +
         `Contribute your receipt to improve accuracy.`;
 
@@ -131,7 +138,7 @@ exports.detectScam = async (req, res) => {
     };
     if (community) {
       result.communityMedian = est.median;
-      if (a.zScore !== null) result.zScore = a.zScore;
+      result.priceComparison = a.zScore > 2 ? "far_above" : a.zScore > 1 ? "above" : "near_usual";
     }
 
     res.json({ success: true, data: result });
@@ -157,7 +164,7 @@ const THANKS_RESPONSES = [
 const ABOUT_RESPONSE =
   `Verifee helps travelers in India avoid being overcharged. Here's what I can do:\n` +
   `- Check the fair price for any product in any Indian city\n` +
-  `- Detect if a quoted price is a scam (with Z-score analysis)\n` +
+  `- Assess whether a quoted price is unusually high compared with local buyer prices\n` +
   `- Give you bargaining scripts in Hindi and 10 other Indian languages\n` +
   `- Compare prices across multiple cities\n` +
   `- Show trusted markets and their trust scores\n\n` +

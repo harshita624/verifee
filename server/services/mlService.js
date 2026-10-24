@@ -5,12 +5,13 @@
 
 const PriceReport = require("../models/PriceReport");
 const ScamReport  = require("../models/ScamReport");
+const { normalizeProductName, productNameRegex } = require("../utils/productName");
 
 // ── 1. Statistical anomaly detection ─────────────────────────────────────────
 
 async function detectPriceAnomaly(product, city, offeredPrice) {
   const reports = await PriceReport.find({
-    product: { $regex: new RegExp(product.split(" ").join("|"), "i") },
+    product: { $regex: productNameRegex(product) },
     ...(city && { city: { $regex: new RegExp(city, "i") } }),
     isVerified: true,
   }).select("pricePaid").lean();
@@ -128,8 +129,8 @@ async function findSimilarReports(queryProduct, city, limit = 10) {
 
   if (!candidates.length) return [];
 
-  const queryTokens  = tokenize(queryProduct);
-  const docTokens    = candidates.map(c => tokenize(c.product));
+  const queryTokens  = tokenize(normalizeProductName(queryProduct));
+  const docTokens    = candidates.map(c => tokenize(normalizeProductName(c.product)));
   const allTokens    = [queryTokens, ...docTokens];
   const tfidfVectors = computeTFIDF(allTokens);
   const queryVec     = tfidfVectors[0];
@@ -146,8 +147,9 @@ async function findSimilarReports(queryProduct, city, limit = 10) {
 
 async function computePriceTrend(product, city) {
   const reports = await PriceReport.find({
-    product: { $regex: new RegExp(product.split(" ").join("|"), "i") },
+    product: { $regex: productNameRegex(product) },
     ...(city && { city: { $regex: new RegExp(city, "i") } }),
+    isVerified: true,
   })
     .select("pricePaid createdAt")
     .sort({ createdAt: 1 })
@@ -218,8 +220,10 @@ async function computeMarketTrustScore(city, marketName) {
 // ── 5. Price distribution ─────────────────────────────────────────────────────
 
 async function getPriceDistribution(product, city) {
+  // Deliberately global across contributors: only verified reports are pooled,
+  // with no submittedBy filter, so every user's verified price can contribute.
   const reports = await PriceReport.find({
-    product:    { $regex: new RegExp(product.split(" ").join("|"), "i") },
+    product:    { $regex: productNameRegex(product) },
     ...(city && { city: { $regex: new RegExp(city, "i") } }),
     isVerified: true,
   }).select("pricePaid").lean();
