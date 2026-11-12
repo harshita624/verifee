@@ -8,6 +8,7 @@ import {
   Zap, Trophy, ChevronRight, Plus,
 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
+import { api } from "@/lib/payments";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
 
@@ -39,35 +40,16 @@ function StatCard({ label, value, icon: Icon, color, bg, sub }) {
 
 export default function DashboardPage() {
   const { user, loading: authLoading } = useAuth();
-  const [profileData, setProfileData]  = useState(null);
-  const [loading,     setLoading]      = useState(false);
   const [myReports, setMyReports] = useState([]);
 
   useEffect(() => {
     if (!user) return;
-    const token = localStorage.getItem("vf_token");
-    if (!token) return;
-    setLoading(true);
-    fetch(`${API}/api/v1/auth/me`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then((r) => r.json())
-      .then((d) => { if (d.success) setProfileData(d.data.user); })
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, [user]);
-
-  useEffect(() => {
-    if (!user) return;
-    const token = localStorage.getItem("vf_token");
-    if (!token) return;
-    fetch(`${API}/api/v1/prices/mine`, { cache: "no-store", headers: { Authorization: `Bearer ${token}` } })
-      .then((r) => r.json())
-      .then((d) => { if (d.success) setMyReports(d.data || []); })
+    api("/prices/mine")
+      .then((reports) => setMyReports(reports || []))
       .catch(() => {});
   }, [user]);
 
-  if (authLoading || loading) {
+  if (authLoading) {
     return (
       <div className="min-h-screen pt-[60px] flex items-center justify-center">
         <Loader2 className="w-7 h-7 text-green-600 animate-spin" />
@@ -110,7 +92,7 @@ export default function DashboardPage() {
     );
   }
 
-  const u            = profileData || user;
+  const u            = user;
   const xp           = u.xp            || 0;
   const level        = u.level          || 1;
   const contributions= u.contributionCount || 0;
