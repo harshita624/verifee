@@ -54,9 +54,12 @@ export default function PayPalButton({
 
     const reportError = (error) => {
       const normalized = error instanceof Error ? error : new Error(String(error?.message || error || "PayPal checkout failed."));
+      normalized.paypalIssue ||= error?.code || error?.issue || error?.paypalIssue;
+      normalized.paypalDebugId ||= error?.debug_id || error?.debugId || error?.paypalDebugId;
       console.error("PayPal v6 checkout failed", {
         name: normalized.name,
         message: normalized.message,
+        code: normalized.code || error?.code,
         paypalIssue: normalized.paypalIssue,
         paypalDebugId: normalized.paypalDebugId,
       });

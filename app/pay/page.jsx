@@ -314,6 +314,9 @@ export default function FairPayPage() {
                   {error.paypalDebugId && (
                     <p className="mt-1 text-[11px] text-red-500">PayPal reference: {error.paypalDebugId}</p>
                   )}
+                  {error.requestStatus && (
+                    <p className="mt-1 text-[11px] text-red-500">Verifee API status: {error.requestStatus}</p>
+                  )}
                   {error.upgrade && (
                     <Link href="/pricing" className="inline-block mt-2 text-[12px] font-semibold text-green-700 hover:underline">See Verifee Pro →</Link>
                   )}
@@ -472,8 +475,9 @@ export default function FairPayPage() {
                           onApproved={onApproved}
                           onError={(e) => setError({
                             text: e?.message || "PayPal checkout failed. Check the backend logs for the PayPal API error.",
-                            paypalIssue: e?.paypalIssue,
+                            paypalIssue: e?.paypalIssue || e?.code,
                             paypalDebugId: e?.paypalDebugId,
+                            requestStatus: e?.status,
                           })}
                           onCancel={(orderId) => setCancelFor(orderId || lastOrderRef.current)}
                         />
