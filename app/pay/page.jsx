@@ -466,6 +466,7 @@ export default function FairPayPage() {
                         <PayPalButton
                           clientId={cfg.paypal.clientId}
                           currency={cfg.paypal.currency}
+                          environment={cfg.paypal.env}
                           disabled={blocked}
                           createOrder={createOrder}
                           onApproved={onApproved}

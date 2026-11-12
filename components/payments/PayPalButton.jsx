@@ -3,40 +3,38 @@
 import { useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 
-const sdkLoaders = {};
+const sdkLoaders = new Map();
 
-function loadSdk(clientId, currency) {
-  const key = `${clientId}:${currency}`;
-  if (sdkLoaders[key]) return sdkLoaders[key];
+function loadSdk(environment) {
+  const mode = environment === "live" ? "live" : "sandbox";
+  if (window.paypal?.createInstance) return Promise.resolve(window.paypal);
+  if (sdkLoaders.has(mode)) return sdkLoaders.get(mode);
 
-  sdkLoaders[key] = new Promise((resolve, reject) => {
+  const promise = new Promise((resolve, reject) => {
     const script = document.createElement("script");
-    script.src =
-      `https://www.paypal.com/sdk/js?client-id=${encodeURIComponent(clientId)}` +
-      `&currency=${currency}&intent=capture&components=buttons`;
+    script.src = mode === "live"
+      ? "https://www.paypal.com/web-sdk/v6/core"
+      : "https://www.sandbox.paypal.com/web-sdk/v6/core";
     script.async = true;
-    script.onload = () =>
-      window.paypal ? resolve(window.paypal) : reject(new Error("PayPal SDK failed to initialise"));
-    script.onerror = () => {
-      delete sdkLoaders[key];
-      reject(new Error("Could not load PayPal. Check your connection and try again."));
+    script.onload = () => {
+      if (window.paypal?.createInstance) resolve(window.paypal);
+      else reject(new Error("PayPal v6 loaded but did not expose createInstance."));
     };
+    script.onerror = () => reject(new Error("Could not load the PayPal v6 SDK. Check your connection and CSP settings."));
     document.head.appendChild(script);
+  }).catch((error) => {
+    sdkLoaders.delete(mode);
+    throw error;
   });
-  return sdkLoaders[key];
+
+  sdkLoaders.set(mode, promise);
+  return promise;
 }
 
-/**
- * Props:
- *  clientId, currency        from GET /payments/config
- *  createOrder()             → Promise<orderId>   (calls our server)
- *  onApproved(orderId)       → called after the buyer approves; capture on the server here
- *  onError(err), onCancel(orderId)
- *  disabled                  greys the button out and blocks checkout
- */
 export default function PayPalButton({
   clientId,
   currency = "USD",
+  environment = "sandbox",
   createOrder,
   onApproved,
   onError,
@@ -46,81 +44,91 @@ export default function PayPalButton({
   const hostRef = useRef(null);
   const cb = useRef({});
   cb.current = { createOrder, onApproved, onError, onCancel, disabled };
-
-  const [state, setState] = useState("loading"); // loading | ready | ineligible | error
+  const [state, setState] = useState("loading");
 
   useEffect(() => {
-    if (!clientId) return undefined;
+    if (!clientId || !hostRef.current) return undefined;
     let cancelled = false;
-    let buttons;
+    let button;
+    let clickHandler;
 
-    loadSdk(clientId, currency)
-      .then((paypal) => {
-        if (cancelled || !hostRef.current) return undefined;
-        buttons = paypal.Buttons({
-          style: { layout: "vertical", shape: "rect", label: "pay", height: 44 },
-          onClick: (data, actions) => (cb.current.disabled ? actions.reject() : actions.resolve()),
-          createOrder: async () => {
-            try {
-              const orderId = await cb.current.createOrder();
-              if (typeof orderId !== "string" || !orderId.trim()) {
-                throw new Error("Verifee did not receive a PayPal order ID. Check the backend order-creation response.");
-              }
-              return orderId;
-            } catch (error) {
-              cb.current.onError?.(error);
-              throw error;
-            }
-          },
-          onApprove: (data) => {
-            const orderId = data?.orderID || data?.orderId;
-            if (!orderId) {
-              const error = new Error("PayPal approved the checkout but returned no order ID. No capture was requested.");
-              cb.current.onError?.(error);
-              return;
-            }
+    const reportError = (error) => {
+      const normalized = error instanceof Error ? error : new Error(String(error?.message || error || "PayPal checkout failed."));
+      console.error("PayPal v6 checkout failed", {
+        name: normalized.name,
+        message: normalized.message,
+        paypalIssue: normalized.paypalIssue,
+        paypalDebugId: normalized.paypalDebugId,
+      });
+      cb.current.onError?.(normalized);
+    };
+
+    loadSdk(environment)
+      .then(async (paypal) => {
+        const sdk = await paypal.createInstance({
+          clientId,
+          components: ["paypal-payments"],
+          pageType: "checkout",
+        });
+        const methods = await sdk.findEligibleMethods({ currencyCode: currency });
+        if (cancelled || !hostRef.current) return;
+        if (!methods.isEligible("paypal")) {
+          setState("ineligible");
+          return;
+        }
+
+        const session = await sdk.createPayPalOneTimePaymentSession({
+          onApprove: async (data) => {
+            const orderId = data?.orderId || data?.orderID;
+            if (!orderId) throw new Error("PayPal approved the checkout but returned no order ID; capture was not requested.");
             return cb.current.onApproved(orderId);
           },
-          onCancel: (data) => cb.current.onCancel?.(data?.orderID),
-          onError: (err) => {
-            // PayPal's popup often shows a generic message. Keep a safe summary
-            // in the browser console while the page displays the useful detail.
-            console.error("PayPal checkout failed", {
-              name: err?.name,
-              message: err?.message,
-              status: err?.status,
-              issue: err?.paypalIssue,
-              debugId: err?.paypalDebugId,
+          onCancel: (data) => cb.current.onCancel?.(data?.orderId || data?.orderID),
+          onError: reportError,
+        });
+
+        button = document.createElement("paypal-button");
+        button.setAttribute("type", "pay");
+        button.setAttribute("aria-label", "Pay with PayPal");
+        clickHandler = () => {
+          if (cb.current.disabled) return;
+          // Start the server request immediately and pass its promise into the
+          // session, preserving the browser's click activation for the popup.
+          let createOrderPromise;
+          try {
+            createOrderPromise = cb.current.createOrder();
+          } catch (error) {
+            reportError(error);
+            return;
+          }
+          const orderPromise = Promise.resolve(createOrderPromise)
+            .then((orderId) => {
+              if (typeof orderId !== "string" || !orderId.trim()) {
+                throw new Error("Verifee did not receive a PayPal order ID from its backend.");
+              }
+              return { orderId };
             });
-            cb.current.onError?.(err);
-          },
-        });
-        if (!buttons.isEligible()) {
-          setState("ineligible");
-          return undefined;
-        }
-        return buttons.render(hostRef.current).then(() => {
-          if (!cancelled) setState("ready");
-        });
+          session.start({ presentationMode: "auto" }, orderPromise).catch(reportError);
+        };
+        button.addEventListener("click", clickHandler);
+        hostRef.current.replaceChildren(button);
+        setState("ready");
       })
-      .catch((err) => {
+      .catch((error) => {
         if (cancelled) return;
         setState("error");
-        cb.current.onError?.(err);
+        reportError(error);
       });
 
     return () => {
       cancelled = true;
-      try {
-        buttons?.close();
-      } catch {
-        /* already closed */
-      }
+      if (button && clickHandler) button.removeEventListener("click", clickHandler);
+      hostRef.current?.replaceChildren();
     };
-  }, [clientId, currency]);
+  }, [clientId, currency, environment]);
 
   return (
-    <div style={{ opacity: disabled ? 0.5 : 1, transition: "opacity .2s" }}>
+    <div style={{ opacity: disabled ? 0.5 : 1, transition: "opacity .2s" }} aria-busy={state === "loading"}>
       {state === "loading" && (
         <div className="flex items-center justify-center gap-2 py-3 text-[12px] text-zinc-400">
           <Loader2 className="w-4 h-4 animate-spin" /> Loading PayPal…
@@ -128,12 +136,12 @@ export default function PayPalButton({
       )}
       {state === "ineligible" && (
         <p className="text-[12px] text-amber-700 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2">
-          PayPal checkout isn&apos;t available in this browser or region.
+          PayPal checkout isn&apos;t available for this browser, region, or currency.
         </p>
       )}
       {state === "error" && (
         <p className="text-[12px] text-red-600 bg-red-50 border border-red-100 rounded-xl px-3 py-2">
-          PayPal could not be loaded. Refresh the page and try again.
+          PayPal v6 could not initialize. See the error shown above and confirm your PayPal environment settings.
         </p>
       )}
       <div ref={hostRef} />
