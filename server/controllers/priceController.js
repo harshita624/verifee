@@ -1,11 +1,13 @@
 const PriceReport = require("../models/PriceReport");
 const aiService = require("../services/aiService");
+const priceEngine = require("../services/priceEngine");
 const { escapeRegex } = require("../utils/regex");
 const { awardXp } = require("../utils/xp");
 const crypto = require("crypto");
 const path = require("path");
 const ReceiptAsset = require("../models/ReceiptAsset");
 const { normalizeProductName, productNameRegex } = require("../utils/productName");
+const { normalizeCategory, categoryFilter, cleanComparisonDetails, detailsFilter } = require("../utils/category");
 
 const DAILY_REPORT_LIMIT = 25;
 
@@ -25,14 +27,18 @@ const anonymizeContributors = (reports) => reports.map((report) => {
 
 exports.getReports = async (req, res, next) => {
   try {
-    const { product, city, category } = req.query;
+    const { product, city, category, quality } = req.query;
     const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100);
     const page = Math.max(Number(req.query.page) || 1, 1);
 
     const filter = {};
     if (product) filter.product = productNameRegex(product);
     if (city) filter.city = ci(city);
-    if (category) filter.category = category;
+    if (category) Object.assign(filter, categoryFilter(category, product));
+    if (["poor", "fair", "good", "excellent"].includes(String(quality || ""))) {
+      if (quality === "good") filter.$and = [...(filter.$and || []), { $or: [{ quality: "good" }, { quality: { $exists: false } }] }];
+      else filter.quality = quality;
+    }
 
     const [reports, total, stats] = await Promise.all([
       PriceReport.find(filter)
@@ -200,8 +206,9 @@ exports.uploadReceipt = async (req, res, next) => {
  * median of existing reports for the same product+city when there are 3+, or
  * against the AI fair-price range otherwise. Implausible prices stay unverified.
  */
-async function isPlausible(product, city, category, price) {
-  const existing = await PriceReport.find({ product: productNameRegex(product), city: ci(city), isVerified: true })
+async function isPlausible(product, city, category, quality, price, details = {}) {
+  const canonicalCategory = normalizeCategory(category, product);
+  const existing = await PriceReport.find({ product: productNameRegex(product), city: ci(city), ...categoryFilter(canonicalCategory, product), ...detailsFilter(canonicalCategory, details), quality: quality || "good", isVerified: true })
     .select("pricePaid")
     .limit(200)
     .lean();
@@ -213,9 +220,11 @@ async function isPlausible(product, city, category, price) {
   }
 
   try {
-    const est = await aiService.getFairPrice(normalizeProductName(product), city, category);
-    const lo = Number(est.fairPriceMin);
-    const hi = Number(est.fairPriceMax);
+    const est = await priceEngine.estimate({ product: normalizeProductName(product), city, category, quality, details });
+    const hotelNights = canonicalCategory === "hotels" ? Number(normalizedDetails.nights) : 1;
+    const multiplier = canonicalCategory === "hotels" && est.dataSource === "ai_estimate" && Number.isFinite(hotelNights) && hotelNights > 0 ? hotelNights : 1;
+    const lo = Number(est.fairMin) * multiplier;
+    const hi = Number(est.fairMax) * multiplier;
     if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi <= 0) return false;
     return price >= lo * 0.35 && price <= hi * 2.5;
   } catch {
@@ -227,7 +236,7 @@ exports.createReport = async (req, res, next) => {
   try {
     const {
       product, pricePaid, shopName, city, state,
-      marketName, gpsLat, gpsLng, quality, notes,
+      marketName, gpsLat, gpsLng, quality, notes, details,
     } = req.body;
     const category = String(req.body.category || "").trim() || "other";
 
@@ -269,11 +278,14 @@ exports.createReport = async (req, res, next) => {
     if (recent >= DAILY_REPORT_LIMIT)
       return res.status(429).json({ success: false, message: "Daily contribution limit reached. Come back tomorrow." });
 
-    const verified = await isPlausible(product.trim(), city.trim(), category, price);
+    const normalizedCategory = normalizeCategory(category, product);
+    const normalizedQuality = ["poor", "fair", "good", "excellent"].includes(String(quality).toLowerCase()) ? String(quality).toLowerCase() : "good";
+    const normalizedDetails = cleanComparisonDetails(normalizedCategory, details);
+    const verified = await isPlausible(product.trim(), city.trim(), normalizedCategory, normalizedQuality, price, normalizedDetails);
 
     const report = await PriceReport.create({
       product: product.trim(),
-      category,
+      category: normalizedCategory,
       pricePaid: price,
       shopName: shopName?.trim(),
       city: city.trim(),
@@ -281,7 +293,8 @@ exports.createReport = async (req, res, next) => {
       marketName: marketName?.trim(),
       gpsLat: gpsLat ? Number(gpsLat) : undefined,
       gpsLng: gpsLng ? Number(gpsLng) : undefined,
-      quality: ["poor", "fair", "good", "excellent"].includes(quality) ? quality : "good",
+      quality: normalizedQuality,
+      details: normalizedDetails,
       notes: notes ? String(notes).trim().slice(0, 300) : undefined,
       receiptUrl,
       receiptAssetId,
@@ -297,8 +310,8 @@ exports.createReport = async (req, res, next) => {
       success: true,
       data: report,
       message: verified
-        ? `Price report verified! You earned ${xpAwarded} XP.`
-        : "Price report submitted for review. You earned 50 XP.",
+        ? `Price report passed plausibility screening. You earned ${xpAwarded} XP.`
+        : "Price report saved for screening. You earned 50 XP.",
       xpAwarded,
     });
   } catch (err) {
@@ -309,10 +322,15 @@ exports.createReport = async (req, res, next) => {
 exports.getProductStats = async (req, res, next) => {
   try {
     const product = decodeURIComponent(req.params.product);
-    const { city } = req.query;
+    const { city, category, quality } = req.query;
 
     const match = { product: productNameRegex(product), isVerified: true };
     if (city) match.city = ci(city);
+    if (category) Object.assign(match, categoryFilter(category, product));
+    if (["poor", "fair", "good", "excellent"].includes(String(quality || ""))) {
+      if (quality === "good") match.$and = [...(match.$and || []), { $or: [{ quality: "good" }, { quality: { $exists: false } }] }];
+      else match.quality = quality;
+    }
 
     const [stats, recentReports] = await Promise.all([
       PriceReport.aggregate([

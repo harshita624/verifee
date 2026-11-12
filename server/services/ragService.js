@@ -4,20 +4,22 @@
  */
 
 const mlService  = require("./mlService");
+const { normalizeCategory } = require("../utils/category");
 
 // Build a structured context block from real DB data
-async function buildContext(product, city, offeredPrice) {
+async function buildContext(product, city, offeredPrice, category = "", quality = "") {
+  const canonicalCategory = normalizeCategory(category, product);
   if (!product) {
     return { contextBlock: "", hasRealData: false, dataPoints: 0 };
   }
 
   const [similar, anomaly, trend, distribution] = await Promise.all([
-    mlService.findSimilarReports(product, city || "", 8),
+    mlService.findSimilarReports(product, city || "", 8, canonicalCategory, quality),
     offeredPrice
-      ? mlService.detectPriceAnomaly(product, city || "", offeredPrice)
+      ? mlService.detectPriceAnomaly(product, city || "", offeredPrice, quality, canonicalCategory)
       : Promise.resolve(null),
-    mlService.computePriceTrend(product, city || ""),
-    mlService.getPriceDistribution(product, city || ""),
+    mlService.computePriceTrend(product, city || "", quality, canonicalCategory),
+    mlService.getPriceDistribution(product, city || "", quality, canonicalCategory),
   ]);
 
   const lines = [];

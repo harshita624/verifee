@@ -5,7 +5,8 @@ exports.getShops = async (req, res, next) => {
   try {
     const { city, category, search, limit = 20, page = 1, lat, lng, radius = 10 } = req.query;
 
-    const filter = {};
+    // Public discovery must never expose unreviewed merchant-submitted contact data.
+    const filter = { isVerified: true };
     if (city) filter.city = new RegExp(city, "i");
     if (category) filter.category = category;
     if (search) filter.$or = [
@@ -35,7 +36,7 @@ exports.getShops = async (req, res, next) => {
 
 exports.getShopById = async (req, res, next) => {
   try {
-    const shop = await Shop.findById(req.params.id).lean();
+    const shop = await Shop.findOne({ _id: req.params.id, isVerified: true }).lean();
     if (!shop) return res.status(404).json({ success: false, message: "Shop not found" });
     res.json({ success: true, data: shop });
   } catch (err) {

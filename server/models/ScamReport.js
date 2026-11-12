@@ -16,6 +16,7 @@ const scamReportSchema = new mongoose.Schema({
   reportedAt:    { type: Date, default: Date.now },
   verified:      { type: Boolean, default: false },
   upvotes:       { type: Number, default: 0 },
+  votedBy:       { type: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }], default: [], select: false },
   submittedBy:   { type: mongoose.Schema.Types.ObjectId, ref: "User" },
   category:      { type: String },
 }, { timestamps: true });

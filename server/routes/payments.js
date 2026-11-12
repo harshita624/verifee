@@ -14,6 +14,7 @@ router.post("/guard", optionalAuth, planGate("premium"), c.guard);
 // PayPal
 router.post("/paypal/create-order", protect, c.createPaypalOrder);
 router.post("/paypal/capture-order", protect, c.capturePaypalOrder);
+router.post("/paypal/refund", protect, c.refundMerchantPayment);
 router.post("/paypal/cancel-order", protect, c.cancelPaypalOrder);
 router.post("/paypal/webhook", c.webhook); // signature-verified inside
 
@@ -23,6 +24,7 @@ router.post("/upi/submit", protect, c.submitUpiUtr);
 
 // History
 router.get("/mine", protect, c.myPayments);
+router.get("/receipt/:paymentId", protect, c.getReceipt);
 
 // Admin: confirm UPI payments
 router.get("/admin/upi/pending", protect, restrictTo("admin"), c.adminPendingUpi);

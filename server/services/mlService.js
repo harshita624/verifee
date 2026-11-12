@@ -6,13 +6,22 @@
 const PriceReport = require("../models/PriceReport");
 const ScamReport  = require("../models/ScamReport");
 const { normalizeProductName, productNameRegex } = require("../utils/productName");
+const { categoryFilter, detailsFilter, RISK_TOLERANCE, normalizeCategory } = require("../utils/category");
+
+const qualityFilter = (quality) => !quality ? {} : quality === "good"
+  ? { $and: [{ $or: [{ quality }, { quality: { $exists: false } }] }] }
+  : { quality };
 
 // ── 1. Statistical anomaly detection ─────────────────────────────────────────
 
-async function detectPriceAnomaly(product, city, offeredPrice) {
+async function detectPriceAnomaly(product, city, offeredPrice, quality = "", category = "") {
+  const canonicalCategory = normalizeCategory(category, product);
+  const volatility = RISK_TOLERANCE[canonicalCategory] || 2.2;
   const reports = await PriceReport.find({
     product: { $regex: productNameRegex(product) },
     ...(city && { city: { $regex: new RegExp(city, "i") } }),
+    ...qualityFilter(quality),
+    ...categoryFilter(canonicalCategory, product),
     isVerified: true,
   }).select("pricePaid").lean();
 
@@ -32,13 +41,13 @@ async function detectPriceAnomaly(product, city, offeredPrice) {
   const q1           = sorted[Math.floor(sorted.length * 0.25)];
   const q3           = sorted[Math.floor(sorted.length * 0.75)];
   const iqr          = q3 - q1;
-  const upperFence   = q3 + 1.5 * iqr;
+  const upperFence   = q3 + (volatility < 2.4 ? 1.5 : 2.0) * iqr;
   const isIQROutlier = offeredPrice > upperFence;
 
-  const isAnomaly = zScore > 2.0 || isIQROutlier;
-  const severity  = zScore > 3 ? "extreme"
-    : zScore > 2 ? "high"
-    : zScore > 1.5 ? "moderate"
+  const isAnomaly = zScore > volatility || isIQROutlier;
+  const severity  = zScore > volatility * 1.4 ? "extreme"
+    : zScore > volatility ? "high"
+    : zScore > volatility * 0.65 ? "moderate"
     : "normal";
 
   const overchargePercent = mean > 0
@@ -117,9 +126,12 @@ function cosineSimilarity(vecA, vecB) {
   return magA && magB ? dot / (Math.sqrt(magA) * Math.sqrt(magB)) : 0;
 }
 
-async function findSimilarReports(queryProduct, city, limit = 10) {
+async function findSimilarReports(queryProduct, city, limit = 10, category = "", quality = "") {
+  const canonicalCategory = normalizeCategory(category, queryProduct);
   const candidates = await PriceReport.find({
     ...(city && { city: { $regex: new RegExp(city, "i") } }),
+    ...categoryFilter(canonicalCategory, queryProduct),
+    ...qualityFilter(quality),
     isVerified: true,
   })
     .select("product pricePaid city marketName shopName createdAt")
@@ -145,10 +157,14 @@ async function findSimilarReports(queryProduct, city, limit = 10) {
 
 // ── 3. Linear regression price trend ─────────────────────────────────────────
 
-async function computePriceTrend(product, city) {
+async function computePriceTrend(product, city, quality = "", category = "", details = {}) {
+  const canonicalCategory = normalizeCategory(category, product);
   const reports = await PriceReport.find({
     product: { $regex: productNameRegex(product) },
     ...(city && { city: { $regex: new RegExp(city, "i") } }),
+    ...qualityFilter(quality),
+    ...categoryFilter(canonicalCategory, product),
+    ...detailsFilter(canonicalCategory, details),
     isVerified: true,
   })
     .select("pricePaid createdAt")
@@ -219,12 +235,16 @@ async function computeMarketTrustScore(city, marketName) {
 
 // ── 5. Price distribution ─────────────────────────────────────────────────────
 
-async function getPriceDistribution(product, city) {
+async function getPriceDistribution(product, city, quality = "", category = "", details = {}) {
+  const canonicalCategory = normalizeCategory(category, product);
   // Deliberately global across contributors: only verified reports are pooled,
   // with no submittedBy filter, so every user's verified price can contribute.
   const reports = await PriceReport.find({
     product:    { $regex: productNameRegex(product) },
     ...(city && { city: { $regex: new RegExp(city, "i") } }),
+    ...qualityFilter(quality),
+    ...categoryFilter(canonicalCategory, product),
+    ...detailsFilter(canonicalCategory, details),
     isVerified: true,
   }).select("pricePaid").lean();
 

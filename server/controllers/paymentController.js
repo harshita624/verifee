@@ -2,11 +2,11 @@ const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
 const Payment = require("../models/Payment");
 const User = require("../models/User");
-const PriceReport = require("../models/PriceReport");
+const MerchantProfile = require("../models/MerchantProfile");
 const paypal = require("../services/paypalService");
 const priceEngine = require("../services/priceEngine");
 const aiService = require("../services/aiService");
-const { awardXp } = require("../utils/xp");
+const { normalizeCategory } = require("../utils/category");
 const { extractLastPrice, safeLiveReply } = require("../utils/bargainOffer");
 const { PURPOSES, PREMIUM_PURPOSE, CANCEL_REASONS } = require("../config/paymentMeta");
 
@@ -21,11 +21,6 @@ const PLANS = {
 // PayPal business account is enabled for INR.
 const PAY_CURRENCY = (process.env.PAYPAL_CURRENCY || "USD").toUpperCase() === "INR" ? "INR" : "USD";
 const INR_PER_USD = Number(process.env.INR_PER_USD) || 88;
-
-const CATEGORY_IDS = [
-  "textiles", "handicrafts", "jewelry", "food", "hotels",
-  "transport", "electronics", "souvenirs", "fruits", "tickets",
-];
 
 const round2 = (n) => Math.round(n * 100) / 100;
 const planAmount = (plan) => (PAY_CURRENCY === "INR" ? plan.inr : plan.usd);
@@ -48,6 +43,8 @@ const serializePayment = (p) => ({
   amountInr: p.amountInr,
   status: p.status,
   purpose: p.purpose,
+  paypalCaptureId: p.paypalCaptureId,
+  capturedAt: p.capturedAt,
   cancelReason: p.cancel?.reason,
   createdAt: p.createdAt,
   metadata: p.metadata,
@@ -93,28 +90,6 @@ async function grantPlan(payment) {
   await user.save({ validateBeforeSave: false });
 }
 
-// A captured Fair Pay payment is the strongest price evidence Verifee can get,
-// so it becomes a verified community report automatically.
-async function createVerifiedReport(payment) {
-  const m = payment.metadata || {};
-  if (!m.product || !m.city) return;
-  const report = await PriceReport.create({
-    product: m.product,
-    category: m.category || "souvenirs",
-    pricePaid: payment.amountInr,
-    city: m.city,
-    shopName: m.vendorName || undefined,
-    submittedBy: payment.user,
-    isVerified: true,
-    source: "paypal",
-    aiConfidence: 90,
-    paymentRef: payment._id,
-  });
-  payment.priceReport = report._id;
-  await payment.save();
-  await awardXp(payment.user, 80, { contributionCount: 1 });
-}
-
 /**
  * Atomically claims the payment (status → captured) so a webhook and a browser
  * capture racing each other can never grant the plan twice.
@@ -135,7 +110,7 @@ async function fulfil(paymentId, info = {}) {
 
   try {
     if (payment.kind === "pro_plan") await grantPlan(payment);
-    else if (payment.kind === "fair_pay") await createVerifiedReport(payment);
+    // Fair Pay captures to Verifee, not the named vendor, so it is not seller-price evidence.
   } catch (err) {
     // Money is already captured; never throw away the payment record.
     console.error("fulfil side-effect failed for payment", String(payment._id), err.message);
@@ -166,16 +141,26 @@ exports.guard = async (req, res, next) => {
     const product = String(req.body.product || "").trim();
     const city = String(req.body.city || "").trim();
     const place = String(req.body.place || "").trim();
+    const details = req.body.details && typeof req.body.details === "object" ? req.body.details : {};
+    const quality = String(req.body.quality || "").trim().toLowerCase();
+    const category = normalizeCategory(req.body.category, product);
     const vendorName = String(req.body.vendorName || "").trim().slice(0, 80);
+    const requestedMerchantId = String(req.body.merchantProfileId || "").trim();
     const price = round2(Number(req.body.quotedPriceInr));
 
     if (product.length < 2) throw httpError(400, "Tell us what you are buying.");
     if (!Number.isFinite(price) || price < 1 || price > 200000)
       throw httpError(400, "Enter the quoted price in rupees (₹1 – ₹2,00,000).");
 
+    let marketplaceMerchant = null;
+    if (requestedMerchantId) {
+      marketplaceMerchant = await MerchantProfile.findOne({ _id: requestedMerchantId, claimStatus: "verified", paypalStatus: "connected", paypalReceivable: true, paypalEmailConfirmed: true });
+      if (!marketplaceMerchant || !process.env.PAYPAL_PARTNER_ID) throw httpError(409, "This seller is not connected for PayPal marketplace payments yet.");
+    }
+
     let a;
     try {
-      a = await priceEngine.assess({ product, city, place, price });
+      a = await priceEngine.assess({ product, city, place, category, quality, price, details });
     } catch (e) {
       console.warn("guard: price engine failed:", e.message);
       throw httpError(503, "Could not estimate a fair price right now. Please try again in a moment.");
@@ -228,11 +213,18 @@ exports.guard = async (req, res, next) => {
         purpose: "pay_guard",
         product: est.product,
         city,
+        place,
+        category: est.category,
         amountInr: price,
         verdict,
         p: scamProbability,
         fmin: Math.round(fairMin),
         fmax: Math.round(fairMax),
+        dataSource,
+        dataPoints,
+        quality: est.quality || "good",
+        details: est.details || {},
+        merchantProfileId: marketplaceMerchant ? String(marketplaceMerchant._id) : undefined,
         uid: req.user ? String(req.user._id) : undefined,
       },
       process.env.JWT_SECRET,
@@ -244,7 +236,10 @@ exports.guard = async (req, res, next) => {
       data: {
         product: est.product,
         city,
+        place,
         quotedPriceInr: price,
+        qualityTier: est.quality || "good",
+        category: est.category,
         verdict,
         scamProbability,
         overpricingPercent,
@@ -257,6 +252,10 @@ exports.guard = async (req, res, next) => {
         why,
         dataSource,
         dataPoints,
+        details: est.details || {},
+        comparisonBasis: est.comparisonBasis || "",
+        comparisonRule: est.comparisonRule || "",
+        merchant: marketplaceMerchant ? { id: String(marketplaceMerchant._id), name: marketplaceMerchant.name } : null,
         hint: est.hint,
         requiresConfirmation: verdict === "Scam",
         guardToken,
@@ -316,8 +315,10 @@ exports.createPaypalOrder = async (req, res, next) => {
       const purpose = PURPOSES.find((x) => x.id === req.body.purpose)?.id;
       if (!purpose) throw httpError(400, "Tell us what this payment is for.");
 
-      const category = CATEGORY_IDS.includes(req.body.category) ? req.body.category : "souvenirs";
+      const category = guard.category || normalizeCategory(req.body.category, guard.product);
       const vendorName = String(req.body.vendorName || "").trim().slice(0, 80);
+      const merchant = guard.merchantProfileId ? await MerchantProfile.findOne({ _id: guard.merchantProfileId, claimStatus: "verified", paypalStatus: "connected", paypalReceivable: true, paypalEmailConfirmed: true }) : null;
+      if (guard.merchantProfileId && (!merchant || !process.env.PAYPAL_PARTNER_ID)) throw httpError(409, "The PayPal merchant connection is no longer active. Run the price check again.");
       doc = {
         kind,
         purpose,
@@ -327,13 +328,20 @@ exports.createPaypalOrder = async (req, res, next) => {
         metadata: {
           product: guard.product,
           city: guard.city,
+          place: guard.place || "",
           category,
-          vendorName,
+          vendorName: merchant?.name || vendorName,
+          merchantProfileId: merchant ? String(merchant._id) : undefined,
+          paypalMerchantId: merchant?.paypalMerchantId || undefined,
           guard: {
             verdict: guard.verdict,
             scamProbability: guard.p,
             fairPriceMin: guard.fmin,
             fairPriceMax: guard.fmax,
+            dataSource: guard.dataSource,
+            dataPoints: guard.dataPoints,
+            quality: guard.quality,
+            details: guard.details || {},
           },
         },
       };
@@ -362,6 +370,7 @@ exports.createPaypalOrder = async (req, res, next) => {
         referenceId: String(payment._id),
         customId: String(payment._id),
         requestId: `create-${payment._id}`,
+        payeeMerchantId: doc.metadata?.paypalMerchantId,
       });
       payment.paypalOrderId = order.id;
       await payment.save();
@@ -392,9 +401,9 @@ exports.capturePaypalOrder = async (req, res, next) => {
 
     let order;
     try {
-      order = await paypal.captureOrder(orderId, `capture-${payment._id}`);
+      order = await paypal.captureOrder(orderId, `capture-${payment._id}`, payment.metadata?.paypalMerchantId);
     } catch (err) {
-      if (err.paypal?.issue === "ORDER_ALREADY_CAPTURED") order = await paypal.getOrder(orderId);
+      if (err.paypal?.issue === "ORDER_ALREADY_CAPTURED") order = await paypal.getOrder(orderId, payment.metadata?.paypalMerchantId);
       else throw err;
     }
 
@@ -431,6 +440,36 @@ exports.capturePaypalOrder = async (req, res, next) => {
   }
 };
 
+// Seller-initiated full refund. Only the owner of the connected merchant profile
+// can refund a captured PayPal payment routed to that seller.
+exports.refundMerchantPayment = async (req, res, next) => {
+  try {
+    const profile = await MerchantProfile.findOne({ owner: req.user._id, paypalStatus: "connected", paypalReceivable: true });
+    if (!profile) throw httpError(403, "Connect a PayPal seller account before issuing refunds.");
+    const payment = await Payment.findOne({
+      _id: req.body.paymentId,
+      provider: "paypal",
+      kind: "fair_pay",
+      status: "captured",
+      "metadata.merchantProfileId": String(profile._id),
+    });
+    if (!payment || !payment.paypalCaptureId) throw httpError(404, "Captured sale not found for this merchant.");
+    const result = await paypal.refundCapture(payment.paypalCaptureId, `refund-${payment._id}`, profile.paypalMerchantId);
+    const refund = result.purchase_units?.[0]?.payments?.refunds?.[0] || result;
+    const refundStatus = String(refund.status || result.status || "PENDING").toUpperCase();
+    payment.refund = {
+      id: refund.id || result.id,
+      at: refund.create_time ? new Date(refund.create_time) : new Date(),
+      status: refundStatus.toLowerCase(),
+      amount: Number(refund.amount?.value || payment.amount),
+      currency: refund.amount?.currency_code || payment.currency,
+    };
+    if (refundStatus === "COMPLETED") payment.status = "refunded";
+    await payment.save();
+    res.json({ success: true, data: { status: payment.status, refundStatus: payment.refund.status, paymentId: payment._id } });
+  } catch (err) { next(err); }
+};
+
 // PayPal → us. Only processed when PAYPAL_WEBHOOK_ID is set and the signature
 // verifies; otherwise events are ignored so nobody can forge a plan upgrade.
 //
@@ -465,7 +504,7 @@ async function findPaymentForEvent(resource) {
 async function markRefunded(payment, refundId, when) {
   const updated = await Payment.findOneAndUpdate(
     { _id: payment._id, status: "captured" },
-    { $set: { status: "refunded", "refund.id": refundId, "refund.at": when ? new Date(when) : new Date() } },
+    { $set: { status: "refunded", "refund.id": refundId, "refund.at": when ? new Date(when) : new Date(), "refund.status": "completed", "refund.amount": Number(payment.amount), "refund.currency": payment.currency } },
     { new: true }
   );
   if (!updated || updated.kind !== "pro_plan") return;
@@ -611,6 +650,43 @@ exports.myPayments = async (req, res, next) => {
   try {
     const payments = await Payment.find({ user: req.user._id }).sort({ createdAt: -1 }).limit(20);
     res.json({ success: true, data: payments.map(serializePayment) });
+  } catch (err) {
+    next(err);
+  }
+};
+
+exports.getReceipt = async (req, res, next) => {
+  try {
+    if (!/^[a-f\d]{24}$/i.test(req.params.paymentId)) throw httpError(400, "Invalid payment reference.");
+    const payment = await Payment.findOne({ _id: req.params.paymentId, user: req.user._id, provider: "paypal" }).lean();
+    if (!payment) throw httpError(404, "Payment receipt not found.");
+    if (!["captured", "refunded"].includes(payment.status)) throw httpError(409, "A receipt is available only after PayPal confirms the payment.");
+
+    const isFairPay = payment.kind === "fair_pay";
+    const paidAt = payment.capturedAt || payment.fulfilledAt || payment.updatedAt || payment.createdAt;
+    res.set("Cache-Control", "private, no-store");
+    res.json({ success: true, data: {
+      receiptNumber: `VF-${String(payment._id).slice(-8).toUpperCase()}`,
+      productOrService: payment.metadata?.product || (payment.plan ? `Verifee Pro ${payment.plan} plan` : "Verifee service"),
+      expectedPriceMin: payment.metadata?.guard?.fairPriceMin ?? null,
+      expectedPriceMax: payment.metadata?.guard?.fairPriceMax ?? null,
+      expectedPriceSource: payment.metadata?.guard?.dataSource || null,
+      expectedPriceDataPoints: payment.metadata?.guard?.dataPoints || 0,
+      actualPriceInr: payment.amountInr ?? (payment.currency === "INR" ? payment.amount : null),
+      chargedAmount: payment.amount,
+      currency: payment.currency,
+      merchantName: payment.metadata?.vendorName || "Merchant name not provided",
+      paypalRecipient: payment.metadata?.paypalMerchantId ? (payment.metadata?.vendorName || "Connected Verifee merchant") : "Verifee platform account",
+      merchantNameSource: payment.metadata?.paypalMerchantId ? "verified_merchant_profile" : payment.metadata?.vendorName ? "buyer_provided" : null,
+      city: payment.metadata?.city || "",
+      marketOrArea: payment.metadata?.place || "",
+      paypalTransactionId: payment.paypalCaptureId || "Unavailable from PayPal response",
+      paymentTimestamp: paidAt,
+      paymentStatus: payment.status,
+      refund: payment.refund ? { id: payment.refund.id, at: payment.refund.at, status: payment.refund.status, amount: payment.refund.amount, currency: payment.refund.currency } : null,
+      purpose: payment.purpose,
+      referenceAvailable: isFairPay && payment.metadata?.guard?.fairPriceMin != null,
+    } });
   } catch (err) {
     next(err);
   }

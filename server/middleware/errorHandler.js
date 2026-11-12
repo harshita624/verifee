@@ -18,6 +18,10 @@ module.exports = (err, req, res, next) => {
   res.status(status).json({
     success: false,
     message,
+    ...(err.paypal && {
+      paypalIssue: err.paypal.issue || err.paypal.name || "PAYPAL_REQUEST_FAILED",
+      paypalDebugId: err.paypal.debugId || undefined,
+    }),
     ...(process.env.NODE_ENV === "development" && { stack: err.stack }),
   });
 };

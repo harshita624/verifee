@@ -46,6 +46,9 @@ const paymentSchema = new mongoose.Schema({
   refund: {
     id: String,
     at: Date,
+    status: String,
+    amount: Number,
+    currency: String,
   },
 
   // Audit trail of PayPal webhook events (deduplicated by event id, newest 30 kept)
@@ -67,11 +70,16 @@ const paymentSchema = new mongoose.Schema({
     city: String,
     category: String,
     vendorName: String,
+    merchantProfileId: String,
+    paypalMerchantId: String,
     guard: {
       verdict: String,
       scamProbability: Number,
       fairPriceMin: Number,
       fairPriceMax: Number,
+      dataSource: String,
+      dataPoints: Number,
+      quality: String,
     },
   },
 

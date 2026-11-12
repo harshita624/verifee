@@ -2,6 +2,7 @@ const aiService  = require("../services/aiService");
 const nlpService = require("../services/nlpService");
 const ragService = require("../services/ragService");
 const priceEngine = require("../services/priceEngine");
+const { normalizeCategory, GUIDANCE } = require("../utils/category");
 const { extractLastPrice, safeLiveReply } = require("../utils/bargainOffer");
 
 const fail = (res, err, tag) => {
@@ -16,6 +17,8 @@ const fail = (res, err, tag) => {
 const toFairPriceResponse = (est, displayProduct, displayCity) => ({
   product:          displayProduct,
   city:             displayCity || "India",
+  category:         est.category,
+  qualityTier:      est.quality || "good",
   fairPriceMin:     est.fairMin,
   fairPriceMax:     est.fairMax,
   localMarketAvg:   est.median,
@@ -32,11 +35,19 @@ const toFairPriceResponse = (est, displayProduct, displayCity) => ({
   seasonalNote:     est.seasonalNote,
   bestTimeToBuy:    est.bestTimeToBuy,
   hint:             est.hint,
+  comparisonBasis:  est.comparisonBasis || "",
+  comparisonRule:   est.comparisonRule || "",
+  details:          est.details || {},
+  distanceKm:       est.distanceKm || null,
+  durationMinutes:  est.durationMinutes || null,
+  baseFareMin:      est.baseFareMin ?? null,
+  baseFareMax:      est.baseFareMax ?? null,
+  tollAdjustment:   est.tollAdjustment || 0,
 });
 
 exports.getFairPrice = async (req, res) => {
   try {
-    const { product, city, category, sessionId } = req.body;
+    const { product, city, category, quality, sessionId, details } = req.body;
     if (!product?.trim())
       return res.status(400).json({ success: false, message: "Product is required" });
 
@@ -50,6 +61,8 @@ exports.getFairPrice = async (req, res) => {
       product:  resolvedProduct,
       city:     resolvedCity,
       category: typeof category === "string" ? category : "",
+      quality: typeof quality === "string" ? quality : "",
+      details,
     });
 
     res.json({ success: true, data: toFairPriceResponse(est, resolvedProduct, resolvedCity) });
@@ -64,7 +77,8 @@ exports.getFairPrice = async (req, res) => {
 
 exports.detectScam = async (req, res) => {
   try {
-    const { product, offeredPrice, city, place, sessionId } = req.body;
+    const { product, offeredPrice, city, place, quality, sessionId, details } = req.body;
+    const category = normalizeCategory(req.body.category, product);
 
     if (!product?.trim() || !offeredPrice || Number(offeredPrice) <= 0)
       return res.status(400).json({ success: false, message: "Product and offered price required" });
@@ -78,7 +92,7 @@ exports.detectScam = async (req, res) => {
     nlpService.processQuery(`is ₹${price} fair for ${resolvedProduct} in ${resolvedCity}`, sid);
 
     const a   = await priceEngine.assess({
-      product: resolvedProduct, city: resolvedCity, place: resolvedPlace, price,
+      product: resolvedProduct, city: resolvedCity, place: resolvedPlace, category, quality, price, details,
     });
     const est = a.est;
     const fmt = (n) => Number(n).toLocaleString("en-IN");
@@ -93,7 +107,9 @@ exports.detectScam = async (req, res) => {
       if (price < est.fairMin) walkAwayAdvice = "This quote is below the estimate. Confirm the full fare and route before accepting.";
     } else try {
       const raw = await aiService.callAIRaw(
-        `Product: "${est.product}". Location: ${resolvedPlace || resolvedCity || "India"}.\n` +
+        `Product: "${est.product}". Category: ${est.category}. Location: ${resolvedPlace || resolvedCity || "India"}.\n` +
+          `Comparison rule: ${GUIDANCE[est.category] || "Compare the same product type, model, quantity, material, and condition."}\n` +
+          `User-provided comparison details: ${JSON.stringify(est.details || {})}. Use these details when explaining the counter-offer.\n` +
           `Quoted: ₹${price}. Fair range: ₹${est.fairMin}–₹${est.fairMax} ` +
           `(${est.dataSource === "community_verified" ? `${est.dataPoints} verified community price reports` : "AI estimate"}). ` +
           `The seller is asking ₹${price}; never tell the buyer to offer more than this. Their maximum target is ₹${est.bargainingTarget}. Counter at or below that target.\n` +
@@ -115,13 +131,18 @@ exports.detectScam = async (req, res) => {
     }
 
     const community = est.dataSource === "community_verified";
-    const explanation = community
+    const explanation = est.dataSource === "route_estimate"
+      ? `Compared the selected ${details?.vehicle || "transport"} trip over about ${est.distanceKm} km (${est.durationMinutes} min) with an indicative distance-based fare range. The route estimate does not confirm a scam.`
+      : community
       ? `Compared with ${est.dataPoints} verified community price reports, this quote is ${a.zScore > 2 ? "well above what most buyers paid" : "within the range most buyers paid"}. Typical buyer pays about ₹${fmt(Math.round(est.mean))}.`
-      : `Limited community data. AI estimate of ₹${fmt(est.fairMin)}–₹${fmt(est.fairMax)} for this market. ` +
-        `Contribute your receipt to improve accuracy.`;
+      : est.dataSource === "community_limited"
+        ? `Only ${est.dataPoints} matching verified report(s) were available. This wide range has low confidence; confirm the exact category details before deciding.`
+        : `Limited community data. AI estimate of ₹${fmt(est.fairMin)}–₹${fmt(est.fairMax)} for this market. Contribute your receipt to improve accuracy.`;
 
     const result = {
       offeredPrice:        price,
+      qualityTier:         est.quality || "good",
+      category:             est.category,
       fairPriceMin:        est.fairMin,
       fairPriceMax:        est.fairMax,
       scamProbability:     a.scamProbability,
@@ -135,6 +156,10 @@ exports.detectScam = async (req, res) => {
       alternatives,
       historicalScamCount: a.scamHistory,
       hint:                est.hint,
+      comparisonBasis:     est.comparisonBasis || "",
+      comparisonRule:      est.comparisonRule || "",
+      distanceKm:          est.distanceKm || null,
+      durationMinutes:     est.durationMinutes || null,
     };
     if (community) {
       result.communityMedian = est.median;
@@ -167,7 +192,7 @@ const ABOUT_RESPONSE =
   `- Assess whether a quoted price is unusually high compared with local buyer prices\n` +
   `- Give you bargaining scripts in Hindi and 10 other Indian languages\n` +
   `- Compare prices across multiple cities\n` +
-  `- Show trusted markets and their trust scores\n\n` +
+  `- Find mapped markets and nearby places, and show Verifee-reviewed merchant profiles where available\n\n` +
   `Try asking: "Is ₹3,500 fair for a Pashmina in Srinagar?" or "How to say 'lower price' in Hindi?"`;
 
 exports.chat = async (req, res) => {
@@ -242,7 +267,7 @@ exports.chat = async (req, res) => {
     let ragContext = { hasRealData: false, contextBlock: "" };
     if (productToLookup && dataIntents.includes(intent)) {
       ragContext = await ragService.buildContext(
-        productToLookup, cityToLookup||"", entities.price||null
+        productToLookup, cityToLookup||"", entities.price||null, normalizeCategory("", productToLookup)
       );
     }
 
@@ -297,14 +322,29 @@ exports.recognizeProduct = async (req, res) => {
 
 exports.parseReceipt = async (req, res) => {
   try {
-    const { imageBase64, text } = req.body;
-    if (!imageBase64&&!text)
-      return res.status(400).json({ success: false, message: "imageBase64 or text required" });
-    const result = await aiService.parseReceipt(imageBase64||text);
+    const { imageBase64, mimeType = "image/jpeg", text } = req.body;
+    if (!imageBase64 && !text) return res.status(400).json({ success: false, message: "imageBase64 or text required" });
+    if (imageBase64 && !["image/jpeg", "image/png", "image/webp"].includes(String(mimeType).toLowerCase())) {
+      return res.status(400).json({ success: false, message: "Upload a JPG, PNG, or WebP receipt image." });
+    }
+    if (imageBase64 && String(imageBase64).length > 11_000_000) {
+      return res.status(413).json({ success: false, message: "Receipt images must be 8 MB or smaller." });
+    }
+    const result = imageBase64
+      ? await aiService.analyzeImageWithPrompt(
+          String(imageBase64).replace(/^data:image\/[a-zA-Z0-9.+-]+;base64,/, ""),
+          `Extract only printed information from this shopping receipt. Return valid JSON with fields {"product":"", "items":[{"name":"", "charged":0}], "shopName":"", "amount":0, "date":"", "city":"", "category":"", "confidence":0}. Do not invent missing details; use empty strings, null, or [] when unreadable.`,
+          mimeType
+        )
+      : await aiService.parseReceipt(String(text));
+    if (imageBase64 && !result.items?.length && !result.product) {
+      return res.status(422).json({ success: false, message: "No receipt items could be read. Try a sharper image with the full receipt in frame." });
+    }
     res.json({ success: true, data: result });
-  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+  } catch (err) {
+    res.status(503).json({ success: false, message: err.message || "Receipt reading is temporarily unavailable." });
+  }
 };
-
 exports.getProviderInfo = (req, res) => {
   res.json({ success: true, data: aiService.getProviderInfo() });
 };

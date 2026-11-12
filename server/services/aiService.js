@@ -1175,84 +1175,6 @@ exports.callAIRaw = callAI;
 
 exports.parseJSON = parseJSON;
 
-exports.analyzeImageWithPrompt = async (
-  imageBase64,
-  prompt
-) => {
-  if (!OPENAI_KEY) {
-    throw new Error(
-      "Image analysis is currently unavailable."
-    );
-  }
-
-  const res = await fetchWithRetry(
-    "https://api.openai.com/v1/chat/completions",
-    {
-      method: "POST",
-
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${OPENAI_KEY}`,
-      },
-
-      body: JSON.stringify({
-        model: "gpt-4o",
-
-        messages: [
-          {
-            role: "user",
-
-            content: [
-              {
-                type: "text",
-                text: prompt,
-              },
-
-              {
-                type: "image_url",
-
-                image_url: {
-                  url:
-                    `data:image/jpeg;base64,${imageBase64}`,
-                },
-              },
-            ],
-          },
-        ],
-
-        max_tokens: 1000,
-      }),
-    },
-    { timeoutMs: 20000 }
-  );
-
-  if (!res.ok) {
-    const errorText = await res.text();
-
-    console.error("OpenAI image analysis error:", {
-      status: res.status,
-      response: errorText,
-    });
-
-    throw new Error(
-      "Image analysis is temporarily unavailable. Please try again later."
-    );
-  }
-
-  const data = await res.json();
-
-  const content =
-    data?.choices?.[0]?.message?.content;
-
-  if (!content || !content.trim()) {
-    throw new Error(
-      "The image could not be analyzed. Please try again."
-    );
-  }
-
-  return parseJSON(content);
-};
-
 // Static fallback list used by /markets-search when the AI call fails
 // after retries, so a slow/unavailable AI provider never leaves the user
 // with a blank error screen.
@@ -1333,3 +1255,65 @@ exports.getProviderInfo = () => ({
 
   status: "active",
 });
+// receipt-vision-support
+
+// Multimodal receipt reading. Text-only AI models cannot reliably extract data from image input.
+exports.analyzeImageWithPrompt = async (imageBase64, prompt, mimeType = "image/jpeg") => {
+  const provider = AI_PROVIDER;
+  let url;
+  let headers = { "Content-Type": "application/json" };
+  let body;
+
+  if (provider === "groq" && GROQ_KEY) {
+    url = "https://api.groq.com/openai/v1/chat/completions";
+    headers.Authorization = `Bearer ${GROQ_KEY}`;
+    body = {
+      model: process.env.GROQ_VISION_MODEL || "qwen/qwen3.8-27b",
+      messages: [{ role: "user", content: [
+        { type: "text", text: prompt },
+        { type: "image_url", image_url: { url: `data:${mimeType};base64,${imageBase64}` } },
+      ] }],
+      temperature: 0.1,
+      max_tokens: 1800,
+      response_format: { type: "json_object" },
+    };
+  } else if (provider === "openai" && OPENAI_KEY) {
+    url = "https://api.openai.com/v1/chat/completions";
+    headers.Authorization = `Bearer ${OPENAI_KEY}`;
+    body = {
+      model: process.env.OPENAI_VISION_MODEL || "gpt-4o-mini",
+      messages: [{ role: "user", content: [
+        { type: "text", text: prompt },
+        { type: "image_url", image_url: { url: `data:${mimeType};base64,${imageBase64}` } },
+      ] }],
+      temperature: 0.1,
+      max_tokens: 1800,
+      response_format: { type: "json_object" },
+    };
+  } else if (provider === "gemini" && GEMINI_KEY) {
+    const model = process.env.GEMINI_VISION_MODEL || process.env.GEMINI_MODEL || "gemini-2.5-flash";
+    url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_KEY}`;
+    body = {
+      contents: [{ parts: [
+        { inline_data: { mime_type: mimeType, data: imageBase64 } },
+        { text: prompt },
+      ] }],
+      generationConfig: { temperature: 0.1, maxOutputTokens: 1800, responseMimeType: "application/json" },
+    };
+  } else {
+    throw new Error("Receipt image reading needs a vision model. Configure a vision-capable provider and API key on the server.");
+  }
+
+  const res = await fetchWithRetry(url, { method: "POST", headers, body: JSON.stringify(body) }, { timeoutMs: 30000 });
+  if (!res.ok) {
+    const detail = await res.text();
+    console.error(`${provider} receipt vision error:`, res.status, detail.slice(0, 500));
+    throw new Error("Receipt image analysis failed. Check the configured vision model and try a clearer image.");
+  }
+  const data = await res.json();
+  const content = provider === "gemini"
+    ? data?.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("")
+    : data?.choices?.[0]?.message?.content;
+  if (!content || !content.trim()) throw new Error("The receipt text could not be read. Try a sharper, well-lit image with the full receipt in frame.");
+  return parseJSON(content);
+};

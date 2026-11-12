@@ -58,8 +58,16 @@ async function getAccessToken() {
   });
 
   if (!res.ok) {
-    console.error("PayPal auth failed:", res.status, await res.text().catch(() => ""));
-    throw httpError(502, "Could not authenticate with PayPal. Check PAYPAL_CLIENT_ID / PAYPAL_CLIENT_SECRET.");
+    const responseText = await res.text().catch(() => "");
+    let responseData = {};
+    try { responseData = responseText ? JSON.parse(responseText) : {}; } catch { /* omit unstructured provider text */ }
+    const issue = responseData.error_description || responseData.error || "PAYPAL_AUTH_FAILED";
+    console.error("PayPal OAuth failed:", res.status, responseData.error || "unknown", responseData.error_description || "");
+    throw httpError(
+      502,
+      "PayPal could not authenticate this server. Confirm PAYPAL_ENV and that the Client ID and Secret belong to the same PayPal app and environment.",
+      { name: responseData.error || "PAYPAL_AUTH_FAILED", issue }
+    );
   }
 
   const data = await res.json();
@@ -67,9 +75,10 @@ async function getAccessToken() {
   return tokenCache.value;
 }
 
-async function request(path, { method = "GET", body, requestId } = {}) {
+async function request(path, { method = "GET", body, requestId, extraHeaders = {} } = {}) {
   const token = await getAccessToken();
-  const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+  const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json", ...extraHeaders };
+  if (process.env.PAYPAL_PARTNER_ATTRIBUTION_ID) headers["PayPal-Partner-Attribution-Id"] = process.env.PAYPAL_PARTNER_ATTRIBUTION_ID;
   // Idempotency: retrying the same request never double-charges.
   if (requestId) headers["PayPal-Request-Id"] = requestId;
 
@@ -99,16 +108,21 @@ async function request(path, { method = "GET", body, requestId } = {}) {
   return data;
 }
 
-async function createOrder({ amount, currency, description, referenceId, customId, requestId }) {
+async function createOrder({ amount, currency, description, referenceId, customId, requestId, payeeMerchantId }) {
+  const extraHeaders = payeeMerchantId
+    ? { "PayPal-Auth-Assertion": authAssertion(payeeMerchantId) }
+    : {};
   return request("/v2/checkout/orders", {
     method: "POST",
     requestId,
+    extraHeaders,
     body: {
       intent: "CAPTURE",
       purchase_units: [
         {
           reference_id: referenceId,
           custom_id: customId,
+          ...(payeeMerchantId ? { payee: { merchant_id: payeeMerchantId } } : {}),
           description: String(description).slice(0, 127),
           amount: { currency_code: currency, value: Number(amount).toFixed(2) },
         },
@@ -122,14 +136,54 @@ async function createOrder({ amount, currency, description, referenceId, customI
   });
 }
 
-const captureOrder = (orderId, requestId) =>
+
+function authAssertion(merchantId) {
+  const enc = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
+  return `${enc({ alg: "none" })}.${enc({ iss: process.env.PAYPAL_CLIENT_ID, payer_id: merchantId })}.`;
+}
+
+async function createPartnerReferral({ trackingId, returnUrl, email, name }) {
+  if (!process.env.PAYPAL_PARTNER_ID) throw httpError(503, "PayPal marketplace onboarding is not enabled. Configure partner credentials after PayPal approval.");
+  const body = {
+    tracking_id: trackingId,
+    ...(email ? { email: { type: "CUSTOMER", address: email } } : {}),
+    ...(name ? { name: { given_name: String(name).slice(0, 80) } } : {}),
+    operations: [{ operation: "API_INTEGRATION", api_integration_preference: { rest_api_integration: {
+      integration_method: "PAYPAL", integration_type: "THIRD_PARTY",
+      third_party_details: { features: ["PAYMENT", "REFUND"] },
+    } } }],
+    products: ["EXPRESS_CHECKOUT"],
+    legal_consents: [{ type: "SHARE_DATA_CONSENT", granted: true }],
+    partner_config_override: { return_url: returnUrl },
+  };
+  const result = await request("/v2/customer/partner-referrals", { method: "POST", body, extraHeaders: process.env.PAYPAL_PARTNER_ATTRIBUTION_ID ? { "PayPal-Partner-Attribution-Id": process.env.PAYPAL_PARTNER_ATTRIBUTION_ID } : {} });
+  return { referralId: result.links?.find((x) => x.rel === "self")?.href?.split("/").pop(), actionUrl: result.links?.find((x) => x.rel === "action_url")?.href };
+}
+
+async function getSellerStatus(merchantId) {
+  if (!process.env.PAYPAL_PARTNER_ID) throw httpError(503, "PayPal marketplace partner credentials are not configured.");
+  const extraHeaders = { "PayPal-Auth-Assertion": authAssertion(merchantId) };
+  if (process.env.PAYPAL_PARTNER_ATTRIBUTION_ID) extraHeaders["PayPal-Partner-Attribution-Id"] = process.env.PAYPAL_PARTNER_ATTRIBUTION_ID;
+  return request(`/v1/customer/partners/${encodeURIComponent(process.env.PAYPAL_PARTNER_ID)}/merchant-integrations/${encodeURIComponent(merchantId)}`, { extraHeaders });
+}
+
+const captureOrder = (orderId, requestId, merchantId) =>
   request(`/v2/checkout/orders/${encodeURIComponent(orderId)}/capture`, {
     method: "POST",
     body: {},
     requestId,
+    extraHeaders: merchantId ? { "PayPal-Auth-Assertion": authAssertion(merchantId) } : {},
   });
 
-const getOrder = (orderId) => request(`/v2/checkout/orders/${encodeURIComponent(orderId)}`);
+const refundCapture = (captureId, requestId, merchantId) =>
+  request(`/v2/payments/captures/${encodeURIComponent(captureId)}/refund`, {
+    method: "POST", body: {}, requestId,
+    extraHeaders: merchantId ? { "PayPal-Auth-Assertion": authAssertion(merchantId) } : {},
+  });
+
+const getOrder = (orderId, merchantId) => request(`/v2/checkout/orders/${encodeURIComponent(orderId)}`, {
+  extraHeaders: merchantId ? { "PayPal-Auth-Assertion": authAssertion(merchantId) } : {},
+});
 
 function extractCapture(order) {
   const cap = order?.purchase_units?.[0]?.payments?.captures?.[0];
@@ -166,7 +220,10 @@ module.exports = {
   isConfigured,
   createOrder,
   captureOrder,
+  refundCapture,
   getOrder,
   extractCapture,
   verifyWebhook,
+  createPartnerReferral,
+  getSellerStatus,
 };

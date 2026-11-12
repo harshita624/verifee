@@ -16,8 +16,11 @@ module.exports = function sanitizeInput(req, res, next) {
     }
   }
   if (req.query && typeof req.query === "object") {
+    // Coordinates, radii, pagination and numeric filters must retain punctuation
+    // (notably the decimal point in GPS coordinates). Validate them where used.
+    const numericQuery = new Set(["lat", "lng", "latitude", "longitude", "radius", "radiusKm", "limit", "page", "min", "max"]);
     for (const k of Object.keys(req.query)) {
-      if (typeof req.query[k] === "string") req.query[k] = clean(req.query[k]);
+      if (typeof req.query[k] === "string" && !numericQuery.has(k)) req.query[k] = clean(req.query[k]);
     }
   }
   next();

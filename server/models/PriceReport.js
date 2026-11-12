@@ -2,7 +2,7 @@ const mongoose = require("mongoose");
 
 const priceReportSchema = new mongoose.Schema({
   product: { type: String, required: true, trim: true, index: true },
-  category: { type: String, required: true },
+  category: { type: String, required: true, index: true },
   pricePaid: { type: Number, required: true, min: 0 },
   shopName: { type: String, trim: true },
   city: { type: String, required: true, trim: true, index: true },
@@ -11,6 +11,7 @@ const priceReportSchema = new mongoose.Schema({
   gpsLat: Number,
   gpsLng: Number,
   quality:{type:String,enum:["poor","fair","good","excellent"],default:"good"},
+  details: { type: mongoose.Schema.Types.Mixed, default: {} },
   notes:{type:String,trim:true,maxlength:300},
 
   source:{type:String,enum:["manual","paypal"],default:"manual"},

@@ -1,8 +1,11 @@
 const express      = require("express");
 const aiController = require("../controllers/aiController");
 const aiService     = require("../services/aiService");
+const priceEngine   = require("../services/priceEngine");
+const travelProviders = require("../services/travelProviders");
 const { protect }  = require("../middleware/auth");
 const { extractLastPrice, safeLiveReply } = require("../utils/bargainOffer");
+const { normalizeCategory, GROUPS } = require("../utils/category");
 
 const router = express.Router();
 
@@ -16,130 +19,27 @@ router.post("/parse-receipt",     protect, aiController.parseReceipt);
 
 router.post("/markets-search", async (req, res) => {
   try {
-    const { query, city, limit = 8 } = req.body;
-
-    const system = `You are a database of real Indian markets and bazaars. 
-Return ONLY a valid JSON array. No markdown, no explanation, no code fences.
-Include only REAL, well-known markets. Be accurate about locations and products.`;
-
-    const cityContext = city ? `in or near ${city}` : "across major Indian cities";
-    const queryContext = query ? `matching or related to "${query}"` : "popular with tourists and locals";
-
-    // FIX: capped at 6 to keep generation fast enough to reliably finish
-    // inside the timeout, even under load.
-    const safeLimit = Math.min(Number(limit) || 6, 6);
-
-    const prompt = `List ${safeLimit} real Indian markets ${cityContext} that are ${queryContext}.
-
-Return ONLY this JSON array (no other text):
-[
-  {
-    "id": "<slug like 'crawford-market' or 'johari-bazaar'>",
-    "name": "<exact real market name>",
-    "city": "<city>",
-    "state": "<Indian state>",
-    "category": "<main category: Textiles|Jewellery|Handicrafts|Food|Electronics|Mixed|Vegetables|Antiques>",
-    "description": "<1-2 short sentences: what is sold here, why tourists visit>",
-    "trustScore": <number 55-92>,
-    "fairPriceScore": <number 50-88>,
-    "touristFriendlyScore": <number 55-95>,
-    "avgRating": <number 3.6-4.8>,
-    "totalReviews": <number 200-6000>,
-    "negotiationSuccessRate": <number 45-85>,
-    "peakHours": ["<morning time>", "<evening time>"],
-    "languages": ["Hindi", "<local language>", "English"],
-    "popularProducts": ["<product1>", "<product2>", "<product3>", "<product4>"],
-    "openNow": <true or false>,
-    "openingHours": "<e.g. 10:00 AM – 8:00 PM>",
-    "isVerified": true,
-    "color": "<one of: #16a34a|#0ea5e9|#8b5cf6|#f59e0b|#ec4899|#f97316|#14b8a6|#dc2626>"
-  }
-]`;
-
-    // FIX: bumped timeout for this endpoint (structured 6-item JSON needs
-    // more than the global 15s default) and trimmed maxTokens to match.
-    // Timeouts are now retried too (see fetchWithRetry in aiService.js),
-    // so a single slow response no longer kills the whole search.
-    const raw = await aiService.callAIRaw(prompt, system, {
-      maxTokens: 3000,
-      timeoutMs: 30000,
-    });
-    const markets = aiService.parseJSON(raw);
-
-    if (!Array.isArray(markets) || markets.length === 0) {
-      throw new Error("AI returned no markets.");
-    }
-
-    res.json({ success: true, data: markets, count: markets.length });
+    const query = String(req.body.query || "").trim().slice(0, 100);
+    const city = String(req.body.city || "").trim().slice(0, 100);
+    const limit = Math.min(30, Math.max(1, Number(req.body.limit) || 12));
+    if (!query && !city) return res.status(400).json({ success: false, message: "Enter a market name or city." });
+    const data = await travelProviders.searchMarkets(city, query, limit);
+    res.set("Cache-Control", "public, max-age=600");
+    res.json({ success: true, data, count: data.length, source: "OpenStreetMap", unverified: true });
   } catch (err) {
-    console.error("markets-search:", err.message);
-
-    // FIX: wrapped in its own try/catch. A bug in the fallback path itself
-    // must never be allowed to throw inside an async handler uncaught —
-    // that becomes an unhandled rejection and kills the ENTIRE Node
-    // process, which is exactly what happened when FALLBACK_MARKETS was
-    // undefined and .filter() threw here with nothing left to catch it.
-    try {
-      const { city } = req.body;
-      const allFallbacks = Array.isArray(aiService.FALLBACK_MARKETS)
-        ? aiService.FALLBACK_MARKETS
-        : [];
-
-      const filtered = city
-        ? allFallbacks.filter(
-            (m) => m.city?.toLowerCase() === String(city).toLowerCase()
-          )
-        : allFallbacks;
-
-      const data = filtered.length > 0 ? filtered : allFallbacks;
-
-      return res.json({
-        success: true,
-        data,
-        count: data.length,
-        degraded: true,
-      });
-    } catch (fallbackErr) {
-      // FIX: absolute last resort — if even the fallback logic fails,
-      // return a real HTTP error response instead of letting anything
-      // throw uncaught out of this handler.
-      console.error("markets-search fallback also failed:", fallbackErr.message);
-      return res.status(500).json({
-        success: false,
-        message: "Unable to load markets right now. Please try again.",
-      });
-    }
+    res.status(503).json({ success: false, message: err.message || "Market search is temporarily unavailable." });
   }
 });
 
 router.get("/city-places/:city", async (req, res) => {
   try {
-    const { city } = req.params;
-    if (!city) return res.status(400).json({ success: false, message: "city required" });
-
-    const system = `You list real Indian shopping places. Return ONLY valid JSON array.`;
-
-    const prompt = `List 8 real popular shopping markets, bazaars, and areas in ${city}, India.
-Return ONLY this JSON array:
-[
-  {
-    "name": "<exact market/area name>",
-    "category": "<what is mainly sold>",
-    "touristRisk": "<low|medium|high — how likely tourists are overcharged here>"
-  }
-]`;
-
-    const raw    = await aiService.callAIRaw(prompt, system, { maxTokens: 600, timeoutMs: 25000 });
-    const places = aiService.parseJSON(raw);
-
-    if (!Array.isArray(places) || places.length === 0) {
-      throw new Error("AI returned no places. Please try again.");
-    }
-
-    res.json({ success: true, data: places });
+    const city = String(req.params.city || "").trim().slice(0, 100);
+    if (!city) return res.status(400).json({ success: false, message: "City is required." });
+    const data = await travelProviders.searchMarkets(city, "", 20);
+    res.set("Cache-Control", "public, max-age=600");
+    res.json({ success: true, data: data.map(({ name, category }) => ({ name, category, source: "OpenStreetMap", verified: false })) });
   } catch (err) {
-    console.error("city-places:", err.message);
-    res.status(500).json({ success: false, message: err.message });
+    res.status(503).json({ success: false, message: err.message || "Market lookup is temporarily unavailable." });
   }
 });
 
@@ -240,40 +140,99 @@ Return JSON:
 
 router.post("/verify-receipt", async (req, res) => {
   try {
-    const { imageBase64 } = req.body;
-    if (!imageBase64)
-      return res.status(400).json({ success: false, message: "imageBase64 required" });
+    const imageBase64 = String(req.body.imageBase64 || "").replace(/^data:image\/[a-zA-Z0-9.+-]+;base64,/, "");
+    const mimeType = String(req.body.mimeType || "image/jpeg").toLowerCase();
+    const allowedMimeTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
+    if (!imageBase64) return res.status(400).json({ success: false, message: "Choose a receipt image first." });
+    if (!allowedMimeTypes.has(mimeType)) return res.status(400).json({ success: false, message: "Upload a JPG, PNG, or WebP receipt image." });
+    if (imageBase64.length > 11_000_000) return res.status(413).json({ success: false, message: "Receipt images must be 8 MB or smaller." });
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(imageBase64)) return res.status(400).json({ success: false, message: "The receipt image could not be decoded. Please upload it again." });
 
-    const prompt = `Analyze this Indian market receipt. Compare charged prices vs fair market prices.
-Return ONLY this JSON:
-{
-  "items": [{"name":"<item>","charged":<number>,"fairPriceMin":<INR>,"fairPriceMax":<INR>,"status":"<fair|high|very_high>"}],
-  "totalCharged": <number>,
-  "totalFairPrice": <number>,
-  "overchargedBy": <number>,
-  "overchargedPercent": <number>,
-  "advice": "<what customer can do>",
-  "shopName": "<or empty>",
-  "date": "<or empty>"
-}`;
-
-    let result;
-    if (process.env.AI_PROVIDER==="openai"&&process.env.OPENAI_API_KEY) {
-      result = await aiService.analyzeImageWithPrompt(imageBase64, prompt);
-    } else {
-      result = {
-        items:[],"totalCharged":0,"totalFairPrice":null,
-        "overchargedBy":null,"overchargedPercent":null,
-        "advice":"Set AI_PROVIDER=openai in server/.env for full receipt image analysis.",
-        "shopName":"","date":"",
+    const prompt = `Read the receipt image and EXTRACT only information visibly printed on it. Do not estimate prices, invent missing values, or infer a city from context. Return valid JSON only with this shape: {"merchantName":"", "date":"", "city":"", "currency":"INR", "totalCharged":null, "confidence":0, "items":[{"name":"", "category":"one of food, hotels, transport, textiles, handicrafts, jewelry, electronics, souvenirs, fruits, tickets, other", "quantity":1, "charged":0, "nights":null, "guests":null, "roomType":""}]}. Each item's charged amount must be the line total actually printed, not an estimated fair price. For hotel stays, extract nights, guests, and room type only when printed. Use null for unknown values, [] if no line items can be read, and confidence from 0 to 100. Preserve the printed merchant/product wording. Categorize conservatively; use other if uncertain.`;
+    const extracted = await aiService.analyzeImageWithPrompt(imageBase64, prompt, mimeType);
+    const rawItems = Array.isArray(extracted.items) ? extracted.items.slice(0, 12) : [];
+    const items = rawItems.map((item) => {
+      const name = String(item.name || "").trim().slice(0, 100);
+      const detected = normalizeCategory(item.category, name);
+      const category = Object.prototype.hasOwnProperty.call(GROUPS, detected)
+        ? detected
+        : normalizeCategory("", name);
+      return {
+        name,
+        category: Object.prototype.hasOwnProperty.call(GROUPS, category) ? category : "other",
+        quantity: Math.max(1, Math.round(Number(item.quantity) || 1)),
+        charged: Number.isFinite(Number(item.charged)) ? Number(item.charged) : null,
+        nights: Number.isFinite(Number(item.nights)) && Number(item.nights) > 0 ? Math.min(90, Math.round(Number(item.nights))) : null,
+        guests: Number.isFinite(Number(item.guests)) && Number(item.guests) > 0 ? Math.min(20, Math.round(Number(item.guests))) : null,
+        roomType: String(item.roomType || "").trim().slice(0, 60),
       };
+    }).filter((item) => item.name && item.charged > 0);
+    if (!items.length) {
+      return res.status(422).json({ success: false, message: "The receipt image was received, but no priced items could be read. Try a sharper photo with the full receipt visible." });
     }
 
-    res.json({ success: true, data: result });
+    const city = String(req.body.city || extracted.city || "").trim().slice(0, 80);
+    const comparedItems = await Promise.all(items.map(async (item) => {
+      if (!city) return { ...item, status: "unavailable", dataSource: null, dataPoints: 0 };
+      if (item.category === "hotels" && !item.nights) return { ...item, status: "unavailable", dataSource: null, dataPoints: 0, comparisonNote: "Enter the number of nights to compare a hotel bill against per-night prices." };
+      try {
+        const details = item.category === "hotels" ? { nights: item.nights, guests: item.guests, roomType: item.roomType } : {};
+        const estimate = await priceEngine.estimate({ product: item.name, city, category: item.category, details });
+        const units = item.quantity * (item.category === "hotels" ? item.nights : 1);
+        const fairMax = estimate.fairMax * units;
+        const overUpper = item.charged > fairMax;
+        return {
+          ...item,
+          fairPriceMin: estimate.fairMin * units,
+          fairPriceMax: fairMax,
+          unitLabel: item.category === "hotels" ? `per-night range × ${item.nights} night(s)` : item.quantity > 1 ? `× ${item.quantity}` : "",
+          dataSource: estimate.dataSource,
+          dataPoints: estimate.dataPoints,
+          confidence: estimate.confidence,
+          status: item.charged > fairMax * 1.3 ? "very_high" : overUpper ? "high" : "fair",
+        };
+      } catch (error) {
+        console.warn("receipt price comparison unavailable:", item.name, error.message);
+        return { ...item, status: "unavailable", dataSource: null, dataPoints: 0 };
+      }
+    }));
+
+    const comparable = comparedItems.filter((item) => Number.isFinite(item.fairPriceMax));
+    const totalCharged = Number(extracted.totalCharged) > 0
+      ? Number(extracted.totalCharged)
+      : items.reduce((sum, item) => sum + item.charged, 0);
+    const totalFairPriceMin = comparable.reduce((sum, item) => sum + item.fairPriceMin, 0);
+    const totalFairPriceMax = comparable.reduce((sum, item) => sum + item.fairPriceMax, 0);
+    const overchargedBy = comparable.reduce((sum, item) => sum + Math.max(0, item.charged - item.fairPriceMax), 0);
+    const overchargedPercent = totalFairPriceMax > 0 ? Math.round((overchargedBy / totalFairPriceMax) * 100) : null;
+
+    res.json({
+      success: true,
+      data: {
+        merchantName: String(extracted.merchantName || "").trim().slice(0, 100),
+        shopName: String(extracted.merchantName || "").trim().slice(0, 100),
+        date: String(extracted.date || "").trim().slice(0, 40),
+        city,
+        currency: String(extracted.currency || "INR").slice(0, 8),
+        confidence: Math.max(0, Math.min(100, Number(extracted.confidence) || 0)),
+        items: comparedItems,
+        totalCharged,
+        totalFairPrice: comparable.length ? Math.round((totalFairPriceMin + totalFairPriceMax) / 2) : null,
+        totalFairPriceMin: comparable.length ? Math.round(totalFairPriceMin) : null,
+        totalFairPriceMax: comparable.length ? Math.round(totalFairPriceMax) : null,
+        overchargedBy: comparable.length ? Math.round(overchargedBy) : null,
+        overchargedPercent,
+        comparisonAvailable: comparable.length > 0,
+        advice: !city
+          ? "Receipt details were extracted. Add the city to compare with local reference prices."
+          : comparable.length
+          ? "This is a screening estimate, not proof of overcharging. Keep the original receipt and check item quality, quantity, and location."
+          : "Receipt details were extracted, but Verifee has no usable local reference estimate for these items yet.",
+      },
+    });
   } catch (err) {
     console.error("verify-receipt:", err.message);
-    res.status(500).json({ success: false, message: err.message });
+    res.status(503).json({ success: false, message: err.message || "Receipt analysis is temporarily unavailable." });
   }
 });
-
 module.exports = router;

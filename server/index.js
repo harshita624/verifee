@@ -18,6 +18,8 @@ const shopRoutes = require("./routes/shops");
 const scamReportRoutes = require("./routes/scamReports");
 const paymentRoutes = require("./routes/payments");
 const contactRoutes = require("./routes/contact");
+const travelRoutes = require("./routes/travel");
+const merchantRoutes = require("./routes/merchants");
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -75,6 +77,7 @@ app.use("/api/v1/auth/", limiter(15 * 60 * 1000, 20));
 app.use("/api/v1/ai/", limiter(60 * 1000, 30));
 app.use("/api/v1/payments/", limiter(15 * 60 * 1000, 60));
 app.use("/api/v1/payments/guard", limiter(60 * 1000, 15));
+app.use("/api/v1/travel/", limiter(60 * 1000, 30));
 // Contact form: 5 messages per hour per IP
 app.use("/api/v1/contact", limiter(60 * 60 * 1000, 5));
 
@@ -124,6 +127,8 @@ app.use("/api/v1/shops", shopRoutes);
 app.use("/api/v1/scam-reports", scamReportRoutes);
 app.use("/api/v1/payments", paymentRoutes);
 app.use("/api/v1/contact", contactRoutes);
+app.use("/api/v1/travel", travelRoutes);
+app.use("/api/v1/merchants", merchantRoutes);
 
 app.use((req, res) => {
   res.status(404).json({ success: false, message: `Route ${req.originalUrl} not found` });

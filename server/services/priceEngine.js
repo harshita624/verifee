@@ -20,6 +20,8 @@ const EstimateCache = require("../models/EstimateCache");
 const ScamReport = require("../models/ScamReport");
 const { escapeRegex } = require("../utils/regex");
 const { normalizeProductName, productNameRegex } = require("../utils/productName");
+const { normalizeCategory, categoryFilter, GUIDANCE, RISK_TOLERANCE, cleanComparisonDetails } = require("../utils/category");
+const travelProviders = require("./travelProviders");
 
 const TTL_MS = (Number(process.env.ESTIMATE_CACHE_HOURS) || 24) * 60 * 60 * 1000;
 const MIN_COMMUNITY_REPORTS = 3;
@@ -62,8 +64,10 @@ function splitProduct(rawProduct, rawPlace) {
   return { product, place };
 }
 
-const cacheKey = ({ product, city, place, category }) =>
-  ["v3", product, city, place, category]
+const cacheKey = ({ product, city, place, category, quality, details }) =>
+  // Bump whenever estimate assumptions change so old hallucinated or
+  // unit-mismatched results cannot survive the cache TTL.
+  ["v8", product, city, place, category, quality, JSON.stringify(details || {})]
     .map((s) => squash(s).toLowerCase())
     .join("|")
     .slice(0, 300);
@@ -98,6 +102,7 @@ Give prices SPECIFIC to the city and market provided:
 - Tourist-hotspot markets are 30-80% more expensive than neighbourhood bazaars.
 - Treat "auto ride", "rickshaw ride" and "auto-rickshaw ride" as the same service. Assume a short, standard in-city trip and do not change the estimate just because a market/vendor area was selected; route distance affects the actual fare.
 If the item name is vague, assume the most common mid-range version a tourist would buy.
+When a quality tier is given, estimate only that tier and compare like-for-like; do not mix premium and low-quality items.
 Return ONLY valid JSON. No markdown, no code fences.`;
 
 function normaliseProfile(r) {
@@ -132,7 +137,11 @@ async function fetchProfile(ctx) {
   const where = ctx.place ? `${ctx.place}, ${ctx.city || "India"}` : ctx.city || "India";
   const prompt =
     `Estimate the fair price a LOCAL pays in a physical market for "${ctx.product}" in ${where}.` +
-    `${ctx.category ? ` Category: ${ctx.category}.` : ""}\n\n` +
+    ` Category: ${ctx.category}. Category comparison rule: ${GUIDANCE[ctx.category] || "Compare the same named category, model, size, quantity, material, and condition."}\n` +
+    `${ctx.quality ? ` Quality tier: ${ctx.quality}; compare like-for-like quality.` : ""}\n` +
+    `${ctx.category === "hotels" ? "Hotel price unit: return all fair range and average amounts per room per night. Use nights and guests as context, and do not multiply the price range by nights." : ""}\n` +
+    `${ctx.category === "jewelry" && /lacquer|non-precious|wood|plastic|glass/i.test(ctx.details.metal || "") ? "IMPORTANT MATERIAL DISAMBIGUATION: this is a lacquer fashion bangle, not gold or silver. The user's word laakh/lac/lakh names the material; it is not a price of one lakh rupees. Do not use gold-per-gram pricing. Estimate only comparable lacquer bangles with the stated set size." : ""}\n` +
+    `Category-specific details: ${JSON.stringify(ctx.details || {})}. Compare like-for-like using these details and state assumptions. Do not claim live market lookup.\n\n` +
     `Return exactly this JSON (all prices are INR numbers):\n` +
     `{\n` +
     `  "fairPriceMin": 0,\n` +
@@ -157,7 +166,28 @@ async function fetchProfile(ctx) {
     timeoutMs: 25000,
     json: true,
   });
-  return normaliseProfile(aiService.parseJSON(raw, { requiredFields: ["fairPriceMin", "fairPriceMax"] }));
+  const profile = normaliseProfile(aiService.parseJSON(raw, { requiredFields: ["fairPriceMin", "fairPriceMax"] }));
+  // A language model may still mistake "laakh" bangles for precious metal,
+  // despite the prompt clarification. Never let that produce a five-figure
+  // estimate for lacquer/costume pieces when there is no matching community data.
+  if (
+    ctx.category === "jewelry" &&
+    /lacquer|non-precious|wood|plastic|glass/i.test(ctx.details?.metal || "") &&
+    (profile.fairMax > 10000 || profile.fairMin > 10000)
+  ) {
+    return {
+      ...profile,
+      fairMin: 150,
+      fairMax: 5000,
+      median: 1200,
+      onlineAvg: null,
+      touristPremium: 0,
+      confidence: 20,
+      aiRecommendation: "Broad starting range only: lacquer and costume bangles vary by design and set size. Confirm the material and number of pieces, then compare local receipts.",
+      scamWarning: "No verified local reports are available for this exact material and set. This broad range is not a market quote.",
+    };
+  }
+  return profile;
 }
 
 const inflight = new Map();
@@ -185,33 +215,102 @@ async function getProfile(ctx) {
  * Returns a normalised estimate. Community data (3+ verified price reports) wins;
  * otherwise the cached AI estimate is used.
  */
-async function estimate({ product, city = "", place = "", category = "" }) {
+async function estimate({ product, city = "", place = "", category = "", quality = "", details = {} }) {
   const split = splitProduct(product, place);
   const canonicalProduct = normalizeProductName(split.product);
+  const canonicalCategory = normalizeCategory(category, canonicalProduct);
   const isAutoRide = canonicalProduct.toLowerCase() === "auto rickshaw ride";
   const ctx = {
     product: canonicalProduct,
     place: isAutoRide ? "" : split.place,
     city: squash(city),
-    category: squash(category).slice(0, 40),
+    category: canonicalCategory.slice(0, 40),
+    quality: ["poor", "fair", "good", "excellent"].includes(String(quality).toLowerCase()) ? String(quality).toLowerCase() : "",
+    details: cleanComparisonDetails(canonicalCategory, details),
   };
   if (!ctx.product) throw httpError(400, "Product is required");
 
-  const dist = await mlService.getPriceDistribution(ctx.product, ctx.city).catch(() => null);
+  if (ctx.category === "transport") {
+    const pickup = ctx.details.pickup;
+    const destination = ctx.details.destination;
+    if (!pickup || !destination) throw httpError(400, "For a transport check, enter both pickup and destination so the fare is based on a route.");
+    if (!ctx.city) throw httpError(400, "Enter the city for this transport route so pickup and destination can be located accurately.");
+    const citySuffix = `, ${ctx.city}, India`;
+    const trip = await travelProviders.route(`${pickup}${citySuffix}`, `${destination}${citySuffix}`);
+    const distanceKm = Number(trip.routes[0].distanceKm);
+    const durationMinutes = Math.round(trip.routes[0].durationMinutes);
+    const vehicle = ctx.details.vehicle || "auto";
+    let fairMin, fairMax, vehicleLabel, median, mean = null, std = null;
+    const community = await mlService.getPriceDistribution(ctx.product, ctx.city, ctx.quality, ctx.category, ctx.details).catch(() => null);
+    const hasRouteCommunity = Boolean(community && community.count >= MIN_COMMUNITY_REPORTS);
+    if (hasRouteCommunity) {
+      fairMin = community.p25; fairMax = community.p75;
+      if (!(fairMax > fairMin)) { fairMin = Math.round(community.median * 0.9); fairMax = Math.round(community.median * 1.1); }
+      median = community.median; mean = community.mean; std = community.std;
+      vehicleLabel = vehicle === "cab" ? "app cab" : vehicle === "bus" ? "public transport" : "auto-rickshaw";
+    } else if (vehicle === "cab") {
+      fairMin = Math.round(50 + distanceKm * 16); fairMax = Math.round(80 + distanceKm * 24); vehicleLabel = "app cab";
+    } else if (vehicle === "bus") {
+      fairMin = Math.max(10, Math.round(distanceKm * 5)); fairMax = Math.max(fairMin, Math.round(distanceKm * 12)); vehicleLabel = "public transport";
+    } else {
+      fairMin = Math.round(25 + distanceKm * 12); fairMax = Math.round(35 + distanceKm * 18); vehicleLabel = "auto-rickshaw";
+    }
+    median = median || Math.round((fairMin + fairMax) / 2);
+    const baseFareMin = fairMin;
+    const baseFareMax = fairMax;
+    const tollAmount = Number(ctx.details.tollAmount) || 0;
+    const tollAdjustment = tollAmount > 0 && !hasRouteCommunity ? tollAmount : 0;
+    if (tollAdjustment > 0) { fairMin += tollAdjustment; fairMax += tollAdjustment; median += tollAdjustment; }
+    const comparisonBasis = `${distanceKm.toFixed(1)} km road route · about ${durationMinutes} min · ${vehicleLabel} · ${ctx.details.fareType || "meter"} fare${tollAdjustment > 0 ? ` · ₹${tollAdjustment} user-entered toll added` : ""} · ${pickup}, ${ctx.city} → ${destination}, ${ctx.city}`;
+    return {
+      product: ctx.product, category: ctx.category, place: ctx.place, city: ctx.city, quality: ctx.quality || "good",
+      fairMin, fairMax, median, mean, std, onlineAvg: null, touristPremium: 0,
+      bargainingStart: niceRound(fairMin * 0.85), bargainingTarget: niceRound(fairMin + 0.35 * (fairMax - fairMin)),
+      confidence: hasRouteCommunity ? Math.min(98, 40 + community.count * 4) : 38,
+      dataSource: hasRouteCommunity ? "community_verified" : "route_estimate",
+      dataPoints: hasRouteCommunity ? community.count : 0,
+      trend: hasRouteCommunity ? "Route-matched community data" : "Route-based estimate",
+      bestTimeToBuy: "", aiRecommendation: "Confirm the vehicle, meter or fixed-fare terms, and any tolls before the trip.",
+      scamWarning: hasRouteCommunity ? "This range uses verified reports for the same route and vehicle; traffic, time, tolls, and local rates can still change the fare." : "This is an indicative route-fare heuristic, not a regulated tariff or proof of fraud. Traffic, time, tolls, and local rates can change the fare.",
+      seasonalNote: "", broad: false, hint: hasRouteCommunity ? "" : "Calculated from the road route and selected transport mode; no live meter or app fare was queried.",
+      comparisonBasis, comparisonRule: GUIDANCE.transport, distanceKm, durationMinutes, vehicle, details: ctx.details,
+      baseFareMin, baseFareMax, tollAdjustment,
+    };
+  }
+
+  const dist = await mlService.getPriceDistribution(ctx.product, ctx.city, ctx.quality, ctx.category, ctx.details).catch(() => null);
   const hasCommunity = !!dist && dist.count >= MIN_COMMUNITY_REPORTS;
   const trend = hasCommunity
-    ? await mlService.computePriceTrend(ctx.product, ctx.city).catch(() => null)
+    ? await mlService.computePriceTrend(ctx.product, ctx.city, ctx.quality, ctx.category, ctx.details).catch(() => null)
     : null;
 
   let profile = null;
-  try {
-    profile = await getProfile(ctx);
-  } catch (err) {
-    if (!hasCommunity) {
-      err.statusCode = err.statusCode || 503;
-      throw err;
+  let sparseCommunity = false;
+  // Three or more matching verified reports are the source of truth. Skip the
+  // external AI call entirely in that case for faster, deterministic responses.
+  if (!hasCommunity) {
+    try {
+      profile = await getProfile(ctx);
+    } catch (err) {
+      if (dist?.count > 0) {
+        // If the AI provider is down, return a deliberately wide, low-confidence band
+        // from the small category-matched sample instead of failing the whole feature.
+        sparseCommunity = true;
+        const center = dist.median || dist.mean;
+        const uncertainty = dist.count === 1 ? 0.45 : 0.25;
+        profile = {
+          fairMin: Math.max(1, Math.round(Math.min(dist.min, center * (1 - uncertainty)))),
+          fairMax: Math.round(Math.max(dist.max, center * (1 + uncertainty))),
+          median: Math.round(center), onlineAvg: null, touristPremium: 0,
+          confidence: Math.min(30, 15 + dist.count * 5), trend: "Stable",
+          bestTimeToBuy: "", aiRecommendation: "Compare the exact size, model, route or serving before deciding.",
+          scamWarning: "Only a small number of matching community reports are available.", seasonalNote: "",
+        };
+      } else {
+        err.statusCode = err.statusCode || 503;
+        throw err;
+      }
     }
-    console.warn("AI profile unavailable, using community data only:", err.message);
   }
 
   let fairMin, fairMax, median, mean = null, std = null, touristPremium, confidence, dataSource, dataPoints;
@@ -236,8 +335,8 @@ async function estimate({ product, city = "", place = "", category = "" }) {
     median = profile.median;
     touristPremium = profile.touristPremium;
     confidence = profile.confidence;
-    dataSource = "ai_estimate";
-    dataPoints = 0;
+    dataSource = sparseCommunity ? "community_limited" : "ai_estimate";
+    dataPoints = sparseCommunity ? dist.count : 0;
   }
 
   const usableTrend = hasCommunity && trend && trend.trend !== "insufficient_data" ? trend : null;
@@ -252,8 +351,11 @@ async function estimate({ product, city = "", place = "", category = "" }) {
 
   return {
     product: ctx.product,
+    category: ctx.category,
+    details: ctx.details,
     place: ctx.place,
     city: ctx.city,
+    quality: ctx.quality || "good",
     fairMin,
     fairMax,
     median,
@@ -277,6 +379,8 @@ async function estimate({ product, city = "", place = "", category = "" }) {
       : profile?.scamWarning || "",
     seasonalNote,
     broad,
+    comparisonBasis: Object.entries(ctx.details).map(([key, value]) => `${key}: ${value}`).join(" · "),
+    comparisonRule: GUIDANCE[ctx.category] || "Compare the same product category, model, size, quantity, material, and condition.",
     hint: isAutoRide
       ? "A route-specific fare needs pickup and destination details."
       : broad
@@ -293,6 +397,7 @@ const verdictFor = (p) => (p >= 70 ? "Scam" : p >= 40 ? "Suspicious" : "Fair");
  */
 function judge(price, est, scamHistory = 0) {
   const { fairMin, fairMax } = est;
+  const categoryTolerance = RISK_TOLERANCE[est.category] || 2.2;
   const mid = (fairMin + fairMax) / 2;
   const overpricingPercent = Math.round(((price - mid) / mid) * 100);
 
@@ -302,9 +407,9 @@ function judge(price, est, scamHistory = 0) {
   if (est.dataSource === "community_verified" && est.std > 0) {
     const z = (price - est.mean) / est.std;
     zScore = Number(z.toFixed(2));
-    if (z > 3) p = Math.min(99, 85 + z * 3);
-    else if (z > 2) p = Math.min(84, 60 + z * 12);
-    else if (z > 1) p = Math.min(59, 30 + z * 18);
+    if (z > categoryTolerance * 1.4) p = Math.min(99, 85 + (z - categoryTolerance * 1.4) * 8);
+    else if (z > categoryTolerance) p = Math.min(84, 60 + (z - categoryTolerance) * 20);
+    else if (z > categoryTolerance * 0.65) p = Math.min(59, 30 + (z - categoryTolerance * 0.65) * 24);
     else p = Math.max(5, z * 20);
   } else {
     const over = price / fairMax - 1;
@@ -321,16 +426,18 @@ function judge(price, est, scamHistory = 0) {
   }
 
   if (scamHistory > 0) p = Math.min(99, p + scamHistory * 5);
+  if (est.dataSource === "community_limited" || est.dataSource === "route_estimate") p = Math.min(69, p);
   p = Math.round(p);
 
   return { scamProbability: p, verdict: verdictFor(p), overpricingPercent, zScore };
 }
 
-async function scamHistoryCount(product, city) {
+async function scamHistoryCount(product, city, category) {
   try {
     const n = await ScamReport.countDocuments({
       product: productNameRegex(product),
       ...(city && { city: new RegExp(escapeRegex(city), "i") }),
+      ...categoryFilter(category, product),
     });
     return Math.min(n, 5);
   } catch {
@@ -339,9 +446,29 @@ async function scamHistoryCount(product, city) {
 }
 
 /** estimate + judge + scam history, in one call. Used by Scam Detector and Pay Guard. */
-async function assess({ product, city, place, category, price }) {
-  const est = await estimate({ product, city, place, category });
-  const scamHistory = await scamHistoryCount(est.product, est.city);
+async function assess({ product, city, place, category, quality, price, details }) {
+  const est = await estimate({ product, city, place, category, quality, details });
+  // Hotel AI estimates are per room per night. A quoted booking total must be
+  // compared with the same number of nights; otherwise a multi-night stay can
+  // be incorrectly flagged as overpriced against a one-night rate.
+  if (est.category === "hotels") {
+    const nights = Number(est.details?.nights);
+    if (!Number.isFinite(nights) || nights < 1) {
+      throw httpError(400, "Enter the number of nights so the hotel quote can be compared correctly.");
+    }
+    // Community prices are contributed against matching stay details (including
+    // nights), so they already represent the comparable booking total.
+    if (est.dataSource === "ai_estimate") {
+      est.fairMin = Math.round(est.fairMin * nights);
+      est.fairMax = Math.round(est.fairMax * nights);
+      est.median = Math.round(est.median * nights);
+      est.bargainingStart = niceRound(est.fairMin * 0.85);
+      est.bargainingTarget = niceRound(est.fairMin + 0.35 * (est.fairMax - est.fairMin));
+      est.comparisonBasis = `${est.comparisonBasis ? `${est.comparisonBasis} · ` : ""}${nights}-night stay total`;
+      est.hint = `AI reference is per room per night and has been multiplied by ${nights} night(s). Taxes, fees, cancellation terms, and included facilities can change the total.`;
+    }
+  }
+  const scamHistory = await scamHistoryCount(est.product, est.city, est.category);
   return { est, scamHistory, ...judge(price, est, scamHistory) };
 }
 
