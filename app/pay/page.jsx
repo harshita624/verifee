@@ -9,11 +9,12 @@ import {
 import { useAuth } from "@/hooks/useAuth";
 import { useLocation } from "@/hooks/useLocation";
 import { CATEGORIES } from "@/lib/utils";
-import { api, parseUpiUri, buildUpiUri, isValidVpa, formatInr } from "@/lib/payments";
+import { API, api, parseUpiUri, buildUpiUri, isValidVpa, formatInr } from "@/lib/payments";
 import QrScanner from "@/components/payments/QrScanner";
 import UpiQr from "@/components/payments/UpiQr";
 import PayPalButton from "@/components/payments/PayPalButton";
 import PurposePicker from "@/components/payments/PurposePicker";
+import CategoryDetailsFields, { inferCategoryFromProduct } from "@/components/CategoryDetailsFields";
 import CancelReasonDialog from "@/components/payments/CancelReasonDialog";
 
 const VERDICT = {
@@ -31,7 +32,11 @@ export default function FairPayPage() {
 
   const [cfg, setCfg] = useState(null);
   const [vendor, setVendor] = useState({ pa: "", pn: "" });
-  const [form, setForm] = useState({ product: "", city: "", category: "souvenirs", amount: "" });
+  const [merchantProfileId, setMerchantProfileId] = useState("");
+  const [quality, setQuality] = useState("good");
+  const [details, setDetails] = useState({});
+  const [merchants, setMerchants] = useState([]);
+  const [form, setForm] = useState({ product: "", city: "", place: "", category: "", amount: "" });
   const [scanning, setScanning] = useState(false);
   const [guard, setGuard] = useState(null);
   const [checking, setChecking] = useState(false);
@@ -43,6 +48,7 @@ export default function FairPayPage() {
   const [purposeTouched, setPurposeTouched] = useState(false);
   const [cancelFor, setCancelFor] = useState(null); // orderId waiting for a cancel reason
   const lastOrderRef = useRef(null);
+  const selectedCategory = form.category || inferCategoryFromProduct(form.product) || "other";
 
   useEffect(() => {
     api("/payments/config", { auth: false }).then(setCfg).catch(() => {});
@@ -52,12 +58,20 @@ export default function FairPayPage() {
     if (detectedCity) setForm((f) => (f.city ? f : { ...f, city: detectedCity }));
   }, [detectedCity]);
 
+  useEffect(() => {
+    if (!form.city.trim()) { setMerchants([]); return; }
+    const controller = new AbortController();
+    fetch(`${API}/api/v1/merchants/directory?city=${encodeURIComponent(form.city)}`, { signal: controller.signal })
+      .then((r) => r.json()).then((d) => setMerchants(d.success ? d.data : [])).catch(() => {});
+    return () => controller.abort();
+  }, [form.city]);
+
   // Suggest a purpose from the category until the buyer chooses one themselves.
   useEffect(() => {
     if (purposeTouched) return;
     const map = { transport: "transport", food: "food", fruits: "food", hotels: "accommodation", tickets: "other" };
-    setPurpose(map[form.category] || "shopping");
-  }, [form.category, purposeTouched]);
+    setPurpose(map[selectedCategory] || "shopping");
+  }, [selectedCategory, purposeTouched]);
 
   // Any change to what's being checked invalidates the AI verdict.
   const update = (k, v) => {
@@ -92,9 +106,13 @@ export default function FairPayPage() {
         body: {
           product: form.product,
           city: form.city,
-          category: form.category,
+          place: form.place,
+          category: selectedCategory,
+          quality,
+          details,
           quotedPriceInr: Number(form.amount),
           vendorName: vendor.pn,
+          merchantProfileId,
         },
       });
       setGuard(g);
@@ -127,8 +145,9 @@ export default function FairPayPage() {
         kind: "fair_pay",
         guardToken: guard.guardToken,
         amountInr: amount,
-        category: form.category,
+        category: selectedCategory,
         vendorName: vendor.pn,
+        merchantProfileId,
         confirmRisk: ack,
         purpose,
       },
@@ -143,7 +162,7 @@ export default function FairPayPage() {
       if (d.user) setLoggedIn(d.user);
       setPaid(d.payment);
     } catch (e) {
-      setError({ text: e.message });
+      setError({ text: e.message, paypalIssue: e.paypalIssue, paypalDebugId: e.paypalDebugId });
     }
   };
 
@@ -209,6 +228,19 @@ export default function FairPayPage() {
                   placeholder="shopname@okaxis"
                   className={input}
                 />
+                <label className={`${label} mt-3`}>PayPal enrolled Verifee merchant (optional)</label>
+                <select value={merchantProfileId} onChange={(e) => { setMerchantProfileId(e.target.value); const m = merchants.find((x) => x._id === e.target.value); if (m) setVendor((v) => ({ ...v, pn: m.name })); }} className={input}>
+                  <option value="">No enrolled merchant (platform checkout)</option>
+                  {merchants.map((m) => <option key={m._id} value={m._id}>{m.name} · {m.city}</option>)}
+                </select>
+                <label className={`${label} mt-3`}>Merchant or shop name (optional)</label>
+                <input
+                  value={vendor.pn}
+                  onChange={(e) => setVendor((s) => ({ ...s, pn: e.target.value.slice(0, 80) }))}
+                  placeholder="e.g. Jaipur Handicrafts"
+                  className={input}
+                  maxLength={80}
+                />
                 {vendor.pa && !vpaOk && <p className="text-[11px] text-red-500 mt-1.5">That doesn&apos;t look like a valid UPI ID.</p>}
                 {vpaOk && (
                   <div className="mt-3 flex items-center gap-2 rounded-xl px-3 py-2" style={{ background: "#f0fdf4", border: "1px solid #dcfce7" }}>
@@ -234,13 +266,27 @@ export default function FairPayPage() {
                   </div>
                 </div>
                 <div>
-                  <label className={label}>Category</label>
-                  <select value={form.category} onChange={(e) => update("category", e.target.value)} className={input}>
-                    {CATEGORIES.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
+                  <label className={label}>Quality tier for a like-for-like price comparison</label>
+                  <select value={quality} onChange={(e) => { setQuality(e.target.value); setGuard(null); }} className={input}>
+                    <option value="poor">Basic</option><option value="fair">Fair</option><option value="good">Good / typical</option><option value="excellent">Premium</option>
                   </select>
                 </div>
                 <div>
-                  <label className={label}>Price they want (₹)</label>
+                  <label className={label}>Category</label>
+                  <select value={form.category} onChange={(e) => { update("category", e.target.value); setDetails({}); }} className={input}>
+                    <option value="">Auto-detect from product</option>
+                    {CATEGORIES.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
+                  </select>
+                <CategoryDetailsFields category={selectedCategory} value={details} onChange={(next) => { setDetails(next); setGuard(null); setAck(false); }} className="sm:col-span-2" />
+                </div>
+                {selectedCategory !== "transport" && (
+                  <div>
+                    <label className={label}>Market or neighborhood (optional)</label>
+                    <input value={form.place} onChange={(e) => update("place", e.target.value.slice(0, 100))} placeholder="e.g. Johari Bazaar" className={input} maxLength={100} />
+                  </div>
+                )}
+                <div>
+                  <label className={label}>{selectedCategory === "hotels" ? "Total room price for the stay (₹)" : "Price they want (₹)"}</label>
                   <input type="number" min="1" value={form.amount} onChange={(e) => update("amount", e.target.value)} placeholder="e.g. 3500" className={input} />
                   <p className="text-[11px] text-zinc-400 mt-1">Bargained a lower price? Enter it here and re-check.</p>
                 </div>
@@ -262,6 +308,12 @@ export default function FairPayPage() {
                 <AlertTriangle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
                 <div>
                   <p className="text-[13px] text-red-600 leading-relaxed">{error.text}</p>
+                  {error.paypalIssue && (
+                    <p className="mt-1 text-[11px] text-red-500">PayPal issue: {error.paypalIssue}</p>
+                  )}
+                  {error.paypalDebugId && (
+                    <p className="mt-1 text-[11px] text-red-500">PayPal reference: {error.paypalDebugId}</p>
+                  )}
                   {error.upgrade && (
                     <Link href="/pricing" className="inline-block mt-2 text-[12px] font-semibold text-green-700 hover:underline">See Verifee Pro →</Link>
                   )}
@@ -304,7 +356,7 @@ export default function FairPayPage() {
                   <div className="grid grid-cols-3 gap-2">
                     {[
                       { l: "They quoted", val: formatInr(guard.quotedPriceInr), c: "#dc2626" },
-                      { l: "Fair range", val: `${formatInr(guard.fairPriceMin)}–${formatInr(guard.fairPriceMax)}`, c: "#16a34a" },
+                      { l: guard.category === "hotels" ? "Fair stay total" : "Fair range", val: `${formatInr(guard.fairPriceMin)}–${formatInr(guard.fairPriceMax)}`, c: "#16a34a" },
                       { l: "Offer", val: formatInr(guard.counterOffer), c: "#0ea5e9" },
                     ].map((s) => (
                       <div key={s.l} className="rounded-xl bg-white/70 p-2.5 text-center">
@@ -318,6 +370,13 @@ export default function FairPayPage() {
                       ? `Based on ${guard.dataPoints} verified community price reports.`
                       : "AI estimate. No community data for this item yet."}
                   </p>
+                  {(guard.place || guard.comparisonBasis || guard.comparisonRule) && (
+                    <div className="mt-3 rounded-xl border border-blue-100 bg-blue-50 p-3 text-[11px] leading-5 text-blue-900">
+                      {guard.place && <p><b>Market:</b> {guard.place}</p>}
+                      {guard.comparisonBasis && <p><b>Details used:</b> {guard.comparisonBasis}</p>}
+                      {guard.comparisonRule && <p><b>Comparison:</b> {guard.comparisonRule}</p>}
+                    </div>
+                  )}
                 </div>
 
                 <div className="bg-white rounded-2xl border border-zinc-100 p-5">
@@ -403,18 +462,23 @@ export default function FairPayPage() {
                           onChange={(id) => { setPurpose(id); setPurposeTouched(true); }}
                         />
                         <p className="text-[12px] text-zinc-500">You&apos;ll be charged about <b>{approx}</b> ({formatInr(amount)}).</p>
+                        <p className={`text-[11px] rounded-xl px-3 py-2.5 leading-relaxed ${guard.merchant ? "text-green-800 bg-green-50 border border-green-100" : "text-amber-700 bg-amber-50 border border-amber-100"}`}>{guard.merchant ? `PayPal will route this checkout to the verified seller account for ${guard.merchant.name}.` : "PayPal checkout currently pays Verifee’s platform account. A seller name alone does not redirect the funds."}</p>
                         <PayPalButton
                           clientId={cfg.paypal.clientId}
                           currency={cfg.paypal.currency}
                           disabled={blocked}
                           createOrder={createOrder}
                           onApproved={onApproved}
-                          onError={(e) => setError({ text: e?.message || "PayPal checkout failed. Please try again." })}
+                          onError={(e) => setError({
+                            text: e?.message || "PayPal checkout failed. Check the backend logs for the PayPal API error.",
+                            paypalIssue: e?.paypalIssue,
+                            paypalDebugId: e?.paypalDebugId,
+                          })}
                           onCancel={(orderId) => setCancelFor(orderId || lastOrderRef.current)}
                         />
                         <p className="text-[11px] text-zinc-400 leading-relaxed">
                           {cfg.paypal.env === "sandbox" && "Test mode: use a PayPal sandbox buyer account, no real money moves. "}
-                          A captured payment is added to the community price data automatically.
+                          {guard.merchant ? "The PayPal transaction is recorded for the enrolled seller dashboard." : "A captured platform payment creates a Verifee receipt and is not treated as verified shop-price evidence."}
                         </p>
                       </div>
                     )
@@ -433,10 +497,15 @@ export default function FairPayPage() {
                 </h2>
                 <p className="text-[13px] text-zinc-500 leading-relaxed mb-5">
                   {paid.status === "captured"
-                    ? `${formatInr(paid.amountInr)} for ${paid.metadata?.product || "your purchase"} was captured. It's now a verified price in the community data, and you earned +80 XP.`
+                    ? `${formatInr(paid.amountInr)} for ${paid.metadata?.product || "your purchase"} was captured by PayPal. View the transaction receipt for the recorded price reference and recipient.`
                     : "PayPal is still processing this payment. It will be recorded when it clears."}
                 </p>
-                <div className="flex items-center justify-center gap-2">
+                <div className="flex flex-wrap items-center justify-center gap-2">
+                  {paid.status === "captured" && paid.kind === "fair_pay" && paid.id && (
+                    <Link href={`/payment-receipt/${paid.id}`} className="text-[13px] font-semibold text-green-700 border border-green-200 bg-green-50 px-5 py-2.5 rounded-xl hover:bg-green-100">
+                      View / download receipt
+                    </Link>
+                  )}
                   <Link href="/dashboard" className="btn-green text-[13px] px-5 py-2.5 rounded-xl inline-flex items-center gap-2"><Zap className="w-4 h-4" /> View XP</Link>
                   <button
                     onClick={() => { setPaid(null); setGuard(null); setForm((f) => ({ ...f, product: "", amount: "" })); }}

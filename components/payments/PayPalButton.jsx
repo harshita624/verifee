@@ -60,10 +60,40 @@ export default function PayPalButton({
         buttons = paypal.Buttons({
           style: { layout: "vertical", shape: "rect", label: "pay", height: 44 },
           onClick: (data, actions) => (cb.current.disabled ? actions.reject() : actions.resolve()),
-          createOrder: () => cb.current.createOrder(),
-          onApprove: (data) => cb.current.onApproved(data.orderID),
+          createOrder: async () => {
+            try {
+              const orderId = await cb.current.createOrder();
+              if (typeof orderId !== "string" || !orderId.trim()) {
+                throw new Error("Verifee did not receive a PayPal order ID. Check the backend order-creation response.");
+              }
+              return orderId;
+            } catch (error) {
+              cb.current.onError?.(error);
+              throw error;
+            }
+          },
+          onApprove: (data) => {
+            const orderId = data?.orderID || data?.orderId;
+            if (!orderId) {
+              const error = new Error("PayPal approved the checkout but returned no order ID. No capture was requested.");
+              cb.current.onError?.(error);
+              return;
+            }
+            return cb.current.onApproved(orderId);
+          },
           onCancel: (data) => cb.current.onCancel?.(data?.orderID),
-          onError: (err) => cb.current.onError?.(err),
+          onError: (err) => {
+            // PayPal's popup often shows a generic message. Keep a safe summary
+            // in the browser console while the page displays the useful detail.
+            console.error("PayPal checkout failed", {
+              name: err?.name,
+              message: err?.message,
+              status: err?.status,
+              issue: err?.paypalIssue,
+              debugId: err?.paypalDebugId,
+            });
+            cb.current.onError?.(err);
+          },
         });
         if (!buttons.isEligible()) {
           setState("ineligible");

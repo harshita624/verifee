@@ -28,7 +28,7 @@ function timeAgo(dateStr) {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-function ReportCard({ report }) {
+function ReportCard({ report, onUpvote }) {
   const sev = SEVERITY[report.severity] || SEVERITY.medium;
   return (
     <div className="bg-white rounded-2xl border border-zinc-100 p-4 card-hover">
@@ -38,6 +38,7 @@ function ReportCard({ report }) {
             {report.product}
           </p>
           <div className="flex items-center gap-3 flex-wrap">
+            {report.category && <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-semibold capitalize text-zinc-600">{report.category}</span>}
             <span className="flex items-center gap-1 text-[11px] text-zinc-400">
               <MapPin className="w-3 h-3" />
               {report.city}{report.marketName ? ` · ${report.marketName}` : ""}
@@ -84,14 +85,15 @@ function ReportCard({ report }) {
         </p>
       )}
 
-      <div className="flex items-center justify-between pt-2 border-t border-zinc-50">
+      <div className="flex items-center justify-between gap-2 pt-2 border-t border-zinc-50">
+        <button onClick={() => onUpvote(report._id)} className="text-[11px] font-semibold text-zinc-500 hover:text-green-700">Helpful · {report.upvotes || 0}</button>
         <span className="text-[11px] text-zinc-400">
           Reported by {report.reportedBy || "Anonymous"}
           {report.verified && (
             <span className="ml-2 text-green-600 font-semibold">· Verified</span>
           )}
         </span>
-        <Link href={`/scam-check?product=${encodeURIComponent(report.product)}&city=${encodeURIComponent(report.city)}`}>
+        <Link href={`/scam-check?product=${encodeURIComponent(report.product)}&city=${encodeURIComponent(report.city)}&category=${encodeURIComponent(report.category || "")}`}>
           <button className="text-[11px] font-semibold text-green-600 hover:underline">
             Check this product →
           </button>
@@ -110,7 +112,7 @@ export default function ScamFeedPage() {
   const [error,          setError]         = useState("");
   const [showReport,     setShowReport]    = useState(false);
   const [form,           setForm]          = useState({
-    product:"",city:"",marketName:"",chargedPrice:"",fairPrice:"",description:"",
+    product:"",category:"",city:"",marketName:"",chargedPrice:"",fairPrice:"",description:"",
   });
   const [submitting,     setSubmitting]    = useState(false);
   const [submitted,      setSubmitted]     = useState(false);
@@ -138,6 +140,17 @@ export default function ScamFeedPage() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const upvote = async (id) => {
+    const token = localStorage.getItem("vf_token");
+    if (!token) { setError("Sign in to mark a report helpful."); return; }
+    try {
+      const res = await fetch(`${API}/api/v1/scam-reports/${id}/upvote`, { method: "PATCH", headers: { Authorization: `Bearer ${token}` } });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Could not update this report.");
+      setReports((items) => items.map((item) => item._id === id ? { ...item, upvotes: data.data.upvotes } : item));
+    } catch (e) { setError(e.message); }
   };
 
   const submitReport = async () => {
@@ -260,7 +273,7 @@ export default function ScamFeedPage() {
               </div>
             ) : (
               <div className="space-y-3">
-                {reports.map((r, i) => <ReportCard key={r._id || i} report={r} />)}
+                {reports.map((r, i) => <ReportCard key={r._id || i} report={r} onUpvote={upvote} />)}
               </div>
             )}
           </div>
@@ -361,6 +374,14 @@ export default function ScamFeedPage() {
                       className="w-full rounded-xl border border-zinc-200 px-3.5 py-2.5 text-[14px] text-zinc-800 placeholder:text-zinc-400 bg-white" />
                   </div>
                 ))}
+
+                <div>
+                  <label className="block text-[11px] font-semibold text-zinc-500 uppercase tracking-wide mb-1.5">Product category</label>
+                  <select value={form.category} onChange={e=>setForm({ ...form, category: e.target.value })} className="w-full rounded-xl border border-zinc-200 px-3.5 py-2.5 text-[14px] text-zinc-700 bg-white">
+                    <option value="">Auto-detect from product</option>
+                    {CATEGORIES.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+                  </select>
+                </div>
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>

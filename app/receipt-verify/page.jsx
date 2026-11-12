@@ -14,6 +14,7 @@ export default function ReceiptVerifyPage() {
   const [loading,  setLoading] = useState(false);
   const [result,   setResult]  = useState(null);
   const [error,    setError]   = useState("");
+  const [city,     setCity]    = useState("");
   const fileRef = useRef(null);
 
   const handleFile = (f) => {
@@ -40,7 +41,7 @@ export default function ReceiptVerifyPage() {
             "Content-Type": "application/json",
             ...(token && { Authorization: `Bearer ${token}` }),
           },
-          body: JSON.stringify({ imageBase64: base64 }),
+          body: JSON.stringify({ imageBase64: base64, mimeType: file.type || "image/jpeg", city }),
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.message);
@@ -54,13 +55,13 @@ export default function ReceiptVerifyPage() {
     reader.readAsDataURL(file);
   };
 
-  const verdict = result
+  const verdict = result?.comparisonAvailable
     ? result.overchargedPercent > 30
       ? { label: "Overcharged", color: "#dc2626", bg: "#fef2f2", border: "#fecaca" }
       : result.overchargedPercent > 0
-      ? { label: "Slightly high", color: "#f59e0b", bg: "#fffbeb", border: "#fde68a" }
-      : { label: "Fair price", color: "#16a34a", bg: "#f0fdf4", border: "#bbf7d0" }
-    : null;
+      ? { label: "Above reference", color: "#f59e0b", bg: "#fffbeb", border: "#fde68a" }
+      : { label: "Within reference", color: "#16a34a", bg: "#f0fdf4", border: "#bbf7d0" }
+    : result ? { label: "Receipt scanned", color: "#2563eb", bg: "#eff6ff", border: "#bfdbfe" } : null;
 
   return (
     <div className="vf-page">
@@ -77,9 +78,7 @@ export default function ReceiptVerifyPage() {
             Receipt Verifier
           </h1>
           <p className="text-[15px] text-zinc-500 max-w-xl leading-relaxed">
-            Already paid? Take a photo of your receipt. Our AI reads it,
-            identifies every item, and tells you if you were charged a fair
-            price or if the vendor overcharged you.
+            Upload a receipt image to extract its merchant, date, items, and totals. If you provide the city, Verifee compares readable prices with local reference data.
           </p>
         </div>
       </div>
@@ -96,7 +95,7 @@ export default function ReceiptVerifyPage() {
               <input
                 ref={fileRef}
                 type="file"
-                accept="image/*"
+                accept="image/jpeg,image/png,image/webp"
                 className="sr-only"
                 onChange={e => handleFile(e.target.files[0])}
                 capture="environment"
@@ -138,17 +137,23 @@ export default function ReceiptVerifyPage() {
                       className="text-[11px] font-medium px-3 py-1 rounded-full"
                       style={{ background: "#fafafa", border: "1px solid #e4e4e7", color: "#71717a" }}
                     >
-                      Up to 10MB
+                      Up to 8MB
                     </span>
                     <span
                       className="text-[11px] font-medium px-3 py-1 rounded-full"
                       style={{ background: "#fafafa", border: "1px solid #e4e4e7", color: "#71717a" }}
                     >
-                      Any language
+                      Printed languages
                     </span>
                   </div>
                 </div>
               )}
+            </div>
+
+            <div className="bg-white rounded-2xl border border-zinc-100 p-4">
+              <label htmlFor="receipt-city" className="block text-[12px] font-semibold text-zinc-700 mb-1.5">City for local price comparison</label>
+              <input id="receipt-city" value={city} onChange={(e) => setCity(e.target.value)} placeholder="e.g. Jaipur" className="w-full rounded-xl border border-zinc-200 px-3.5 py-2.5 text-[14px] text-zinc-800 placeholder:text-zinc-400" maxLength={80} />
+              <p className="text-[11px] text-zinc-400 mt-1.5">The city helps compare extracted items with local references. You can scan without it.</p>
             </div>
 
             {error && (
@@ -185,13 +190,20 @@ export default function ReceiptVerifyPage() {
           <div>
             {result && !loading && (
               <div className="space-y-4 animate-fade-up">
+                <div className="bg-white rounded-2xl border border-zinc-100 p-4 grid grid-cols-2 gap-3 text-[12px]">
+                  <div><p className="text-zinc-400">Merchant</p><p className="font-semibold text-zinc-800">{result.merchantName || "Not read"}</p></div>
+                  <div><p className="text-zinc-400">Receipt date</p><p className="font-semibold text-zinc-800">{result.date || "Not read"}</p></div>
+                  <div><p className="text-zinc-400">City used</p><p className="font-semibold text-zinc-800">{result.city || "Not provided"}</p></div>
+                  <div><p className="text-zinc-400">Text confidence</p><p className="font-semibold text-zinc-800">{result.confidence}%</p></div>
+                </div>
+
                 {/* Verdict */}
                 <div
                   className="rounded-2xl p-5"
                   style={{ background: verdict.bg, border: `2px solid ${verdict.border}` }}
                 >
                   <div className="flex items-center gap-3 mb-3">
-                    {verdict.label === "Fair price"
+                    {verdict.label === "Within reference"
                       ? <CheckCircle className="w-8 h-8" style={{ color: verdict.color }} />
                       : <AlertTriangle className="w-8 h-8" style={{ color: verdict.color }} />}
                     <div>
@@ -200,7 +212,7 @@ export default function ReceiptVerifyPage() {
                       </p>
                       {result.overchargedPercent > 0 && (
                         <p className="text-[13px]" style={{ color: verdict.color }}>
-                          You paid {result.overchargedPercent}% more than fair price
+                          Receipt lines exceed the upper reference by {result.overchargedPercent}%
                         </p>
                       )}
                     </div>
@@ -234,8 +246,11 @@ export default function ReceiptVerifyPage() {
                             <p className="text-[13px] font-semibold text-zinc-900 truncate">
                               {item.name}
                             </p>
+                            <p className="text-[10px] font-semibold uppercase tracking-wide text-zinc-400">{item.category || "other"} · category inferred from receipt text</p>
                             <p className="text-[11px] text-zinc-400">
-                              Fair price: ₹{item.fairPriceMin?.toLocaleString()} – ₹{item.fairPriceMax?.toLocaleString()}
+                              {item.fairPriceMin != null && item.fairPriceMax != null
+                                ? `Local reference: ₹${item.fairPriceMin.toLocaleString()} – ₹${item.fairPriceMax.toLocaleString()}${item.unitLabel ? ` (${item.unitLabel})` : ""} (${item.dataSource === "community_verified" ? `${item.dataPoints} verified reports` : "AI estimate"})`
+                                : item.comparisonNote || "No local comparison available"}
                             </p>
                           </div>
                           <div className="text-right shrink-0">
@@ -246,11 +261,12 @@ export default function ReceiptVerifyPage() {
                               className="text-[11px] font-semibold"
                               style={{
                                 color: item.status === "fair" ? "#16a34a"
-                                  : item.status === "high" ? "#dc2626"
-                                  : "#f59e0b",
+                                  : item.status === "very_high" ? "#dc2626"
+                                  : item.status === "high" ? "#f59e0b"
+                                  : "#71717a",
                               }}
                             >
-                              {item.status === "fair" ? "Fair" : item.status === "high" ? "Overpriced" : "Slightly high"}
+                              {item.status === "fair" ? "Within range" : item.status === "very_high" ? "Far above range" : item.status === "high" ? "Above range" : "Not compared"}
                             </p>
                           </div>
                         </div>
@@ -267,9 +283,11 @@ export default function ReceiptVerifyPage() {
                       </p>
                     </div>
                     <div className="px-5 py-3 flex items-center justify-between">
-                      <p className="text-[13px] font-semibold text-green-700">Should have been</p>
+                      <p className="text-[13px] font-semibold text-green-700">Local reference range</p>
                       <p className="text-[16px] font-black text-green-700">
-                        ₹{result.totalFairPrice?.toLocaleString() || "—"}
+                        {result.totalFairPriceMin != null && result.totalFairPriceMax != null
+                          ? `₹${result.totalFairPriceMin.toLocaleString()} – ₹${result.totalFairPriceMax.toLocaleString()}`
+                          : "No local comparison"}
                       </p>
                     </div>
                   </div>
@@ -319,8 +337,7 @@ export default function ReceiptVerifyPage() {
                   Verification results appear here
                 </p>
                 <p className="text-[12px] text-zinc-400 max-w-xs leading-relaxed">
-                  Upload any bill or receipt and we'll tell you exactly
-                  whether you paid a fair price.
+                  Upload a receipt image to extract visible details and compare them with available local price references.
                 </p>
               </div>
             )}

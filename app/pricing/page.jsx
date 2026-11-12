@@ -235,6 +235,9 @@ export default function PricingPage() {
                             {p.currency === "INR" ? formatInr(p.amount) : `$${Number(p.amount).toFixed(2)}`}
                           </p>
                           <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full" style={{ background: st.bg, color: st.color }}>{st.label}</span>
+                          {p.status === "captured" && p.kind === "fair_pay" && p.provider === "paypal" && (
+                            <Link href={`/payment-receipt/${p.id}`} className="block mt-1 text-[10px] font-semibold text-green-700 hover:underline">View receipt</Link>
+                          )}
                         </div>
                       </div>
                     );

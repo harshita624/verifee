@@ -26,201 +26,31 @@ const POPULAR_SEARCHES = [
   { label: "Colaba Causeway, Mumbai",    q: "colaba causeway",city: "Mumbai"   },
 ];
 
-function ScoreBar({ value, color = "#16a34a" }) {
-  return (
-    <div className="flex items-center gap-2">
-      <div className="flex-1 h-1.5 rounded-full bg-zinc-100 overflow-hidden">
-        <div className="h-full rounded-full" style={{ width:`${value}%`, background: color }} />
-      </div>
-      <span className="text-[11px] font-bold text-zinc-600 w-6 text-right">{value}</span>
-    </div>
-  );
-}
-
 function MarketCard({ market, onClick }) {
-  const riskColor =
-    market.touristFriendlyScore >= 80 ? "#16a34a"
-    : market.touristFriendlyScore >= 60 ? "#f59e0b"
-    : "#dc2626";
-
   return (
-    <div
-      onClick={() => onClick(market)}
-      className="bg-white rounded-2xl border border-zinc-100 p-5 cursor-pointer card-hover"
-    >
-      <div className="flex items-start justify-between mb-3">
+    <article onClick={() => onClick(market)} className="cursor-pointer rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
+      <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-3">
-          <div
-            className="w-10 h-10 rounded-xl flex items-center justify-center text-white text-[13px] font-bold shrink-0"
-            style={{ background: market.color || "#16a34a" }}
-          >
-            {market.name.slice(0,2)}
-          </div>
-          <div>
-            <div className="flex items-center gap-1.5">
-              <h3 className="text-[15px] font-bold text-zinc-900">{market.name}</h3>
-              {market.isVerified && <CheckCircle className="w-3.5 h-3.5 text-green-500" />}
-            </div>
-            <p className="text-[12px] text-zinc-400 flex items-center gap-1 mt-0.5">
-              <MapPin className="w-3 h-3" />{market.city}, {market.state}
-            </p>
-          </div>
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-green-50 text-sm font-bold text-green-800">{market.name.slice(0, 2)}</div>
+          <div><h3 className="font-bold text-zinc-900">{market.name}</h3><p className="mt-1 flex items-center gap-1 text-xs text-zinc-500"><MapPin className="h-3 w-3"/>{[market.city, market.state].filter(Boolean).join(", ") || "Location listed on map"}</p></div>
         </div>
-        <span
-          className="text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0"
-          style={{
-            background: market.openNow ? "#f0fdf4" : "#fef2f2",
-            color:      market.openNow ? "#16a34a" : "#dc2626",
-          }}
-        >
-          {market.openNow ? "Open" : "Closed"}
-        </span>
+        <span className="shrink-0 rounded-full bg-zinc-100 px-2 py-1 text-[10px] font-semibold text-zinc-600">{market.category || "Mapped place"}</span>
       </div>
-
-      <p className="text-[12px] text-zinc-500 leading-relaxed mb-3 line-clamp-2">
-        {market.description}
-      </p>
-
-      <div className="space-y-1.5 mb-3">
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] text-zinc-400 w-20 shrink-0">Trust</span>
-          <ScoreBar value={market.trustScore} color="#16a34a" />
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] text-zinc-400 w-20 shrink-0">Fair price</span>
-          <ScoreBar value={market.fairPriceScore} color="#0ea5e9" />
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] text-zinc-400 w-20 shrink-0">Tourist OK</span>
-          <ScoreBar value={market.touristFriendlyScore} color={riskColor} />
-        </div>
-      </div>
-
-      <div className="flex items-center justify-between pt-2.5 border-t border-zinc-50">
-        <div className="flex items-center gap-1">
-          <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
-          <span className="text-[12px] font-semibold text-zinc-700">{market.avgRating}</span>
-          <span className="text-[10px] text-zinc-400">({market.totalReviews?.toLocaleString()})</span>
-        </div>
-        <span className="text-[11px] text-zinc-500">
-          <TrendingDown className="w-3.5 h-3.5 text-green-500 inline mr-1" />
-          {market.negotiationSuccessRate}% bargain success
-        </span>
-      </div>
-    </div>
+      <p className="mt-4 min-h-10 text-sm leading-5 text-zinc-600">{market.description || "Listed in OpenStreetMap. Check current details with the venue before visiting."}</p>
+      <div className="mt-4 flex items-center justify-between border-t border-zinc-100 pt-3 text-xs text-zinc-500"><span>{market.source || "OpenStreetMap"} · not independently verified</span><span className="font-semibold text-green-700">View details →</span></div>
+    </article>
   );
 }
 
 function MarketDetail({ market, onClose }) {
   if (!market) return null;
-
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-end md:items-center justify-center p-4"
-      style={{ background: "rgba(0,0,0,0.4)", backdropFilter: "blur(4px)" }}
-      onClick={onClose}
-    >
-      <div
-        className="bg-white rounded-3xl w-full max-w-2xl max-h-[90vh] overflow-y-auto animate-fade-up"
-        style={{ boxShadow: "0 20px 60px rgba(0,0,0,0.18)" }}
-        onClick={e => e.stopPropagation()}
-      >
-        <div className="p-6 border-b border-zinc-100">
-          <div className="flex items-start justify-between">
-            <div className="flex items-center gap-3">
-              <div
-                className="w-12 h-12 rounded-2xl flex items-center justify-center text-white text-[15px] font-bold"
-                style={{ background: market.color || "#16a34a" }}
-              >
-                {market.name.slice(0,2)}
-              </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <h2 className="text-[20px] font-black text-zinc-950">{market.name}</h2>
-                  {market.isVerified && <CheckCircle className="w-5 h-5 text-green-500" />}
-                </div>
-                <p className="text-[13px] text-zinc-500 flex items-center gap-1">
-                  <MapPin className="w-3.5 h-3.5" />{market.city}, {market.state}
-                </p>
-              </div>
-            </div>
-            <button
-              onClick={onClose}
-              className="p-2 rounded-xl hover:bg-zinc-100 transition-colors"
-            >
-              <X className="w-5 h-5 text-zinc-500" />
-            </button>
-          </div>
-        </div>
-
-        <div className="p-6 space-y-5">
-          <p className="text-[14px] text-zinc-600 leading-relaxed">{market.description}</p>
-
-          <div className="grid grid-cols-3 gap-3">
-            {[
-              { label: "Trust Score",   value: market.trustScore,          color: "#16a34a", bg: "#f0fdf4" },
-              { label: "Fair Price",    value: market.fairPriceScore,       color: "#0ea5e9", bg: "#f0f9ff" },
-              { label: "Tourist OK",    value: market.touristFriendlyScore, color: "#8b5cf6", bg: "#faf5ff" },
-            ].map(s => (
-              <div key={s.label} className="rounded-2xl p-3.5 text-center" style={{ background: s.bg }}>
-                <p className="text-[28px] font-black" style={{ color: s.color }}>{s.value}</p>
-                <p className="text-[11px] font-medium" style={{ color: s.color }}>{s.label}</p>
-              </div>
-            ))}
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            {[
-              { label: "Opening hours", value: market.openingHours },
-              { label: "Bargain success", value: `${market.negotiationSuccessRate}% of visitors` },
-              { label: "Peak hours", value: market.peakHours?.join(", ") },
-              { label: "Languages", value: market.languages?.slice(0,3).join(", ") },
-            ].map(s => s.value && (
-              <div key={s.label} className="rounded-xl bg-zinc-50 p-3">
-                <p className="text-[10px] text-zinc-400 mb-1 uppercase tracking-wide">{s.label}</p>
-                <p className="text-[13px] font-semibold text-zinc-800">{s.value}</p>
-              </div>
-            ))}
-          </div>
-
-          {market.popularProducts?.length > 0 && (
-            <div>
-              <p className="text-[12px] font-semibold text-zinc-500 uppercase tracking-wide mb-2">
-                Popular products
-              </p>
-              <div className="flex flex-wrap gap-1.5">
-                {market.popularProducts.map(p => (
-                  <Link
-                    key={p}
-                    href={`/check-price?q=${encodeURIComponent(p)}&city=${encodeURIComponent(market.city)}`}
-                    onClick={onClose}
-                    className="text-[12px] font-medium bg-zinc-100 hover:bg-green-50 hover:text-green-700 text-zinc-600 px-2.5 py-1 rounded-full transition-colors"
-                  >
-                    {p}
-                  </Link>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <div className="flex gap-3">
-            <Link
-              href={`/check-price?city=${encodeURIComponent(market.city)}&place=${encodeURIComponent(market.name)}`}
-              onClick={onClose}
-              className="flex-1 flex items-center justify-center gap-2 btn-green text-[13px] py-3 rounded-xl"
-            >
-              <Shield className="w-4 h-4" /> Check prices here
-            </Link>
-            <Link
-              href={`/scam-check?city=${encodeURIComponent(market.city)}&place=${encodeURIComponent(market.name)}`}
-              onClick={onClose}
-              className="flex-1 flex items-center justify-center gap-2 text-[13px] font-semibold py-3 rounded-xl border border-zinc-200 hover:bg-zinc-50 transition-colors text-zinc-700"
-            >
-              <AlertTriangle className="w-4 h-4 text-red-500" /> Check scams here
-            </Link>
-          </div>
-        </div>
-      </div>
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 backdrop-blur-sm md:items-center" onClick={onClose}>
+      <section className="w-full max-w-xl rounded-3xl bg-white p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-start justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-wide text-green-700">{market.category || "Mapped place"}</p><h2 className="mt-1 text-2xl font-black text-zinc-950">{market.name}</h2><p className="mt-2 flex items-center gap-1 text-sm text-zinc-500"><MapPin className="h-4 w-4"/>{[market.city, market.state, market.description].filter(Boolean).join(" · ")}</p></div><button onClick={onClose} aria-label="Close" className="rounded-lg p-2 text-zinc-500 hover:bg-zinc-100"><X className="h-5 w-5"/></button></div>
+        <p className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm leading-5 text-amber-900">This place listing comes from {market.source || "OpenStreetMap"}. Verifee has not independently checked its opening hours, safety, prices, or merchant identity.</p>
+        <div className="mt-5 grid gap-3 sm:grid-cols-3"><a href={market.mapsUrl || ("https://www.openstreetmap.org/?mlat=" + market.lat + "&mlon=" + market.lng + "#map=16/" + market.lat + "/" + market.lng)} target="_blank" rel="noreferrer" className="rounded-xl border border-zinc-200 px-3 py-3 text-center text-sm font-semibold text-zinc-700">Open map ↗</a><Link href={"/check-price?city=" + encodeURIComponent(market.city || "") + "&place=" + encodeURIComponent(market.name)} onClick={onClose} className="rounded-xl bg-green-600 px-3 py-3 text-center text-sm font-bold text-white">Check prices</Link><Link href={"/scam-check?city=" + encodeURIComponent(market.city || "") + "&place=" + encodeURIComponent(market.name)} onClick={onClose} className="rounded-xl border border-zinc-200 px-3 py-3 text-center text-sm font-semibold text-zinc-700">Check a quote</Link></div>
+      </section>
     </div>
   );
 }
@@ -306,6 +136,12 @@ export default function MarketsPage() {
     const targetCity = city ?? cityFilter;
     setSubmittedSearch(trimmedQ);
     setSubmittedCity(targetCity);
+    if (!trimmedQ && !targetCity) {
+      setMarkets([]);
+      setLoading(false);
+      setError("Choose a city or enter a market name to search mapped listings.");
+      return;
+    }
     fetchMarkets(trimmedQ, targetCity);
   }, [search, cityFilter, fetchMarkets]);
 
@@ -314,7 +150,8 @@ export default function MarketsPage() {
   useEffect(() => {
     if (initialFetchRef.current) return;
     initialFetchRef.current = true;
-    runSearch("", cityFilter);
+    if (cityFilter) runSearch("", cityFilter);
+    else setLoading(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -338,16 +175,14 @@ export default function MarketsPage() {
           <div className="flex items-center gap-2 mb-3">
             <span className="live-dot" />
             <span className="text-[12px] font-semibold text-zinc-500 uppercase tracking-wide">
-              AI-powered market directory
+              Map-based market discovery
             </span>
           </div>
           <h1 className="text-[28px] md:text-[38px] font-black text-zinc-950 mb-3 leading-tight">
-            Find trusted markets near you.
+            Find markets and shopping areas.
           </h1>
           <p className="text-[15px] text-zinc-500 max-w-xl leading-relaxed mb-6">
-            Search any market, bazaar, or shopping area across India.
-            Every result includes trust scores, fair price ratings, and
-            bargaining success rates.
+            Search real market and shopping-area listings from OpenStreetMap. The map data is not independently verified, and Verifee does not invent ratings or opening status.
           </p>
 
           {/* Search row */}
@@ -417,7 +252,7 @@ export default function MarketsPage() {
       <div className="bg-white border-b border-zinc-100">
         <div className="container py-3 flex items-center gap-6 flex-wrap">
           <span className="ml-auto text-[12px] text-zinc-400">
-            {loading ? "Loading..." : `Showing ${markets.length} markets`}
+            {loading ? "Loading..." : `Showing ${markets.length} mapped places`}
             {submittedCity && ` in ${submittedCity}`}
           </span>
         </div>
@@ -446,17 +281,17 @@ export default function MarketsPage() {
         ) : markets.length === 0 ? (
           <div className="text-center py-20">
             <MapPin className="w-14 h-14 text-zinc-200 mx-auto mb-4" />
-            <p className="text-[16px] font-bold text-zinc-700 mb-2">No markets found</p>
+            <p className="text-[16px] font-bold text-zinc-700 mb-2">No mapped places found</p>
             <p className="text-[14px] text-zinc-400 mb-5">
               {submittedSearch
-                ? `No results for "${submittedSearch}". Try a city name or different keyword.`
+                ? `No mapped results for "${submittedSearch}". Try a broader market name or choose its city.`
                 : "Try selecting a city or searching for a market."}
             </p>
             <button
-              onClick={() => { setSearch(""); setCityFilter(""); runSearch("", ""); }}
+              onClick={() => { setSearch(""); setCityFilter("Jaipur"); runSearch("", "Jaipur"); }}
               className="btn-green text-[13px] px-5 py-2.5 rounded-xl"
             >
-              Show all markets
+              Browse Jaipur map listings
             </button>
           </div>
         ) : (
@@ -471,13 +306,13 @@ export default function MarketsPage() {
         {!loading && (
           <div className="mt-10 rounded-2xl border-2 border-dashed border-zinc-200 p-8 text-center">
             <MapPin className="w-8 h-8 text-zinc-300 mx-auto mb-3" />
-            <h3 className="text-[15px] font-bold text-zinc-700 mb-2">Know a market not listed?</h3>
+            <h3 className="text-[15px] font-bold text-zinc-700 mb-2">Can’t find the place on the map?</h3>
             <p className="text-[13px] text-zinc-500 mb-4">
-              Suggest it and earn 30 XP when it gets verified.
+              You can still check a price by entering the city and market name yourself.
             </p>
-            <Link href="/contribute">
+            <Link href="/check-price">
               <button className="btn-green text-[13px] px-5 py-2.5 rounded-xl">
-                Suggest a market
+                Check a price manually
               </button>
             </Link>
           </div>

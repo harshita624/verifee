@@ -11,6 +11,7 @@ import {
 import Badge from "@/components/ui/Badge";
 import { CATEGORIES, formatPrice } from "@/lib/utils";
 import { useLocation } from "@/hooks/useLocation";
+import CategoryDetailsFields, { inferCategoryFromProduct } from "@/components/CategoryDetailsFields";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
 
@@ -18,7 +19,7 @@ const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
 function PriceResult({ result }) {
   if (!result) return null;
 
-  const routeEstimate = result.product?.toLowerCase() === "auto rickshaw ride";
+  const routeEstimate = result.dataSource === "route_estimate" || (result.category === "transport" && result.comparisonBasis?.includes("km road route"));
   const overcharge = result.touristPremium || 0;
   const riskColor  = overcharge >= 60 ? "#dc2626" : overcharge >= 30 ? "#f59e0b" : "#16a34a";
   const riskLabel  = routeEstimate ? "Route-dependent estimate" : overcharge >= 60 ? "High tourist premium"
@@ -41,8 +42,9 @@ function PriceResult({ result }) {
             </div>
             <div className="text-right shrink-0">
               <p className="text-[11px] text-green-200 mb-1">
-                {result.dataSource === "community_verified"
-                  ? `${result.dataPoints} community reports`
+                {result.dataSource === "community_verified" || result.dataSource === "community_limited"
+                  ? `${result.dataPoints} matching reports`
+                  : result.dataSource === "route_estimate" ? "Route-based fare estimate"
                   : "AI estimate"}
               </p>
               <p className="text-[28px] font-black text-white leading-none">{result.confidenceScore}%</p>
@@ -54,14 +56,21 @@ function PriceResult({ result }) {
         {/* Body */}
         <div className="p-5 bg-white space-y-4">
           {/* Data source badge */}
-          <div>
+          <div className="flex flex-wrap items-center gap-2">
+            {result.category && <span className="inline-flex items-center rounded-full border border-zinc-200 bg-white px-2.5 py-1 text-[11px] font-semibold capitalize text-zinc-600">{result.category} · {result.qualityTier || "typical quality"}</span>}
             {result.dataSource === "community_verified" ? (
               <span
                 className="inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-full"
                 style={{ background: "#f0fdf4", color: "#16a34a", border: "1px solid #dcfce7" }}
               >
                 <CheckCircle className="w-3 h-3" />
-                {result.dataPoints} verified community price reports
+                {result.dataPoints} verified, category-matched reports
+              </span>
+            ) : result.dataSource === "route_estimate" ? (
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-[11px] font-semibold text-blue-800"><Navigation className="h-3 w-3" /> Route and vehicle based · indicative fare</span>
+            ) : result.dataSource === "community_limited" ? (
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-800">
+                <Info className="h-3 w-3" /> Low-confidence sample · {result.dataPoints} matching report(s)
               </span>
             ) : (
               <span
@@ -74,9 +83,16 @@ function PriceResult({ result }) {
             )}
           </div>
 
+          {(result.comparisonBasis || result.comparisonRule) && (
+            <div className="rounded-xl border border-blue-100 bg-blue-50 p-3 text-sm text-blue-900">
+              {result.comparisonBasis && <p><b>Details used:</b> {result.comparisonBasis}</p>}
+              {result.comparisonRule && <p className={result.comparisonBasis ? "mt-1" : ""}><b>Category check:</b> {result.comparisonRule}</p>}
+            </div>
+          )}
+
           {/* Price range */}
           <div>
-            <p className="text-[11px] text-zinc-400 mb-1">Fair price range</p>
+            <p className="text-[11px] text-zinc-400 mb-1">Fair price range{result.category === "hotels" ? " per room, per night" : ""}</p>
             <div className="flex items-center gap-3 flex-wrap">
               <p className="text-[32px] font-black text-zinc-950 leading-none">
                 {formatPrice(result.fairPriceMin)} – {formatPrice(result.fairPriceMax)}
@@ -88,7 +104,14 @@ function PriceResult({ result }) {
                 {riskLabel}{!routeEstimate && ` (+${overcharge}%)`}
               </span>
             </div>
-            {result.hint && <p className="mt-2 text-[12px] text-zinc-500">{result.hint}</p>}
+            {result.baseFareMin != null && (
+            <p className="mt-2 text-[12px] text-zinc-500">
+              Calculation: {result.dataSource === "community_verified" ? "route-matched community fare" : "base route fare"} {formatPrice(result.baseFareMin)}–{formatPrice(result.baseFareMax)}
+              {result.tollAdjustment > 0 ? ` + ${formatPrice(result.tollAdjustment)} user-entered toll` : ""}
+              {result.quotedFare ? ` · driver quote: ${formatPrice(result.quotedFare)}` : ""}
+            </p>
+          )}
+          {result.hint && <p className="mt-2 text-[12px] text-zinc-500">{result.hint}</p>}
           </div>
 
           {/* Stats grid */}
@@ -150,7 +173,7 @@ function PriceResult({ result }) {
       {/* Action buttons — all using Link properly */}
       <div className="flex flex-wrap gap-2.5">
         <Link
-          href={`/scam-check?product=${encodeURIComponent(result.product)}&city=${encodeURIComponent(result.city)}`}
+          href={`/scam-check?product=${encodeURIComponent(result.product)}&city=${encodeURIComponent(result.city)}&category=${encodeURIComponent(result.category || "")}&quote=${encodeURIComponent(result.quotedFare || "")}&details=${encodeURIComponent(JSON.stringify(result.details || {}))}`}
           className="flex-1 flex items-center justify-center gap-2 bg-red-50 hover:bg-red-100 border border-red-100 text-red-700 font-semibold text-[13px] py-3 rounded-xl transition-colors min-w-[140px]"
         >
           <AlertTriangle className="w-4 h-4" />
@@ -179,6 +202,8 @@ function CheckPriceContent() {
 
   const [query,        setQuery]        = useState(searchParams.get("q")        || "");
   const [category,     setCategory]     = useState(searchParams.get("category") || "");
+  const [quality,      setQuality]      = useState("good");
+  const [details, setDetails] = useState({});
   const [customCat,    setCustomCat]    = useState("");
   const [loading,      setLoading]      = useState(false);
   const [result,       setResult]       = useState(null);
@@ -248,11 +273,13 @@ function CheckPriceContent() {
           product:  productWithPlace,
           city:     c,
           category: finalCategory,
+          quality,
+          details,
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || "Failed to get price");
-      setResult(data.data);
+      setResult({ ...data.data, quotedFare: Number(details.quotedFare) > 0 ? Number(details.quotedFare) : null });
     } catch (err) {
       setError(err.message || "Something went wrong. Please try again.");
     } finally {
@@ -339,6 +366,16 @@ function CheckPriceContent() {
                 <option value="other">Other (specify below)</option>
               </select>
             </div>
+
+            <CategoryDetailsFields category={category === "other" ? customCat : category || inferCategoryFromProduct(query)} value={details} onChange={setDetails} />
+
+            <label className="flex flex-wrap items-center gap-3 text-sm text-zinc-600">
+              <span className="font-semibold">Compare item quality</span>
+              <select value={quality} onChange={(e) => setQuality(e.target.value)} className="rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm">
+                <option value="poor">Basic</option><option value="fair">Fair</option><option value="good">Good / typical</option><option value="excellent">Premium</option>
+              </select>
+              <span className="text-xs text-zinc-400">Compared with verified reports of similar quality.</span>
+            </label>
 
             {/* Custom category */}
             {category === "other" && (
@@ -512,3 +549,4 @@ export default function CheckPricePage() {
     </Suspense>
   );
 }
+

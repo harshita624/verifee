@@ -8,8 +8,9 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import Badge from "@/components/ui/Badge";
-import { formatPrice } from "@/lib/utils";
+import { formatPrice, CATEGORIES } from "@/lib/utils";
 import { useLocation } from "@/hooks/useLocation";
+import CategoryDetailsFields, { inferCategoryFromProduct } from "@/components/CategoryDetailsFields";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
 
@@ -41,11 +42,18 @@ function ScamResult({ result }) {
       <ScamMeter probability={result.scamProbability} />
 
       {/* Data source */}
-      <div>
+      <div className="flex flex-wrap items-center gap-2">
+        {result.category&&<span className="rounded-full border border-zinc-200 bg-white px-2.5 py-1 text-[11px] font-semibold capitalize text-zinc-600">{result.category} comparison</span>}
         {result.dataSource==="community_verified" ? (
           <span className="text-[11px] font-semibold px-2.5 py-1 rounded-full"
             style={{ background:"#f0fdf4",color:"#16a34a",border:"1px solid #dcfce7" }}>
-            Based on {result.dataPoints} verified community price reports
+            Based on {result.dataPoints} matching verified reports
+          </span>
+        ) : result.dataSource==="route_estimate" ? (
+          <span className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-[11px] font-semibold text-blue-800">Route and vehicle based · indicative fare</span>
+        ) : result.dataSource==="community_limited" ? (
+          <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-800">
+            Low-confidence range · {result.dataPoints} matching report(s)
           </span>
         ) : (
           <span className="text-[11px] font-semibold px-2.5 py-1 rounded-full"
@@ -66,7 +74,7 @@ function ScamResult({ result }) {
           </p>
         </div>
         <div className="rounded-2xl bg-green-50 border border-green-100 p-4">
-          <p className="text-[11px] text-green-500 mb-1">Fair price</p>
+          <p className="text-[11px] text-green-500 mb-1">{result.category === "hotels" ? "Fair price for this stay" : "Fair price"}</p>
           <p className="text-[24px] font-black text-green-700">
             {formatPrice(result.fairPriceMin)} – {formatPrice(result.fairPriceMax)}
           </p>
@@ -74,15 +82,17 @@ function ScamResult({ result }) {
         </div>
       </div>
 
-      {result.priceComparison && (
+      {(result.priceComparison || result.comparisonBasis || result.comparisonRule) && (
         <div className="rounded-2xl bg-zinc-50 border border-zinc-100 p-4">
           <p className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wide mb-2">
-            Community price comparison
+            {result.dataSource === "route_estimate" ? "Route and category checks" : "Price comparison"}
           </p>
-          <p className="text-[13px] text-zinc-700 leading-relaxed">{result.explanation}</p>
-          <p className="mt-2 text-[12px] font-semibold text-zinc-600">
+          {result.comparisonBasis && <p className="text-[13px] text-zinc-700 leading-relaxed"><b>Details used:</b> {result.comparisonBasis}</p>}
+          {result.comparisonRule && <p className="mt-1 text-[13px] text-zinc-700 leading-relaxed"><b>Category check:</b> {result.comparisonRule}</p>}
+          {result.explanation && <p className="mt-2 text-[13px] text-zinc-700 leading-relaxed">{result.explanation}</p>}
+          {result.priceComparison && <p className="mt-2 text-[12px] font-semibold text-zinc-600">
             {result.priceComparison === "far_above" ? "Far above usual prices" : result.priceComparison === "above" ? "Above usual prices" : "Near usual prices"}
-          </p>
+          </p>}
         </div>
       )}
 
@@ -139,8 +149,14 @@ function ScamResult({ result }) {
 function ScamCheckContent() {
   const searchParams = useSearchParams();
   const [product,      setProduct]      = useState(searchParams.get("product")||"");
-  const [offeredPrice, setOfferedPrice] = useState("");
+  const [offeredPrice, setOfferedPrice] = useState(searchParams.get("quote") || "");
+  const [quality, setQuality] = useState("good");
+  const [details, setDetails] = useState(() => {
+    try { return JSON.parse(searchParams.get("details") || "{}"); } catch { return {}; }
+  });
+  const [category, setCategory] = useState(searchParams.get("category") || "");
   const [selectedPlace,setSelectedPlace]= useState(searchParams.get("place")||"");
+  const selectedCategory = category || inferCategoryFromProduct(product);
   const [loading,      setLoading]      = useState(false);
   const [result,       setResult]       = useState(null);
   const [error,        setError]        = useState("");
@@ -183,6 +199,9 @@ function ScamCheckContent() {
           offeredPrice: Number(offeredPrice),
           city: cityInput,
           place: selectedPlace,
+          category,
+          quality,
+          details,
         }),
       });
       const data = await res.json();
@@ -228,7 +247,7 @@ function ScamCheckContent() {
                 <span className="text-[16px] font-bold text-zinc-400">₹</span>
                 <input
                   type="number" value={offeredPrice} onChange={e=>setOfferedPrice(e.target.value)}
-                  placeholder="Price they quoted"
+                  placeholder={selectedCategory === "hotels" ? "Total quoted price for the stay" : "Price they quoted"}
                   className="flex-1 text-[14px] text-zinc-800 placeholder:text-zinc-400 bg-transparent"
                   required min="1"
                 />
@@ -249,6 +268,24 @@ function ScamCheckContent() {
                 </button>
               </div>
             </div>
+
+            <label className="flex flex-wrap items-center gap-3 rounded-xl border border-zinc-100 bg-zinc-50 px-3 py-2 text-sm text-zinc-600">
+              <span className="font-semibold">Product category</span>
+              <select value={category} onChange={e=>setCategory(e.target.value)} className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm">
+                <option value="">Auto-detect from product</option>
+                {CATEGORIES.map((item)=><option key={item.id} value={item.id}>{item.label}</option>)}
+              </select>
+              <span className="text-xs text-zinc-400">Only compare with the same product category.</span>
+            </label>
+            <CategoryDetailsFields category={selectedCategory} value={details} onChange={setDetails} />
+
+            <label className="flex flex-wrap items-center gap-3 text-sm text-zinc-600">
+              <span className="font-semibold">Item quality</span>
+              <select value={quality} onChange={e=>setQuality(e.target.value)} className="rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm">
+                <option value="poor">Basic</option><option value="fair">Fair</option><option value="good">Good / typical</option><option value="excellent">Premium</option>
+              </select>
+              <span className="text-xs text-zinc-400">Price comparison uses verified reports of similar quality.</span>
+            </label>
 
             {/* Place suggestions for city */}
             {cityInput.trim().length >= 3 && (

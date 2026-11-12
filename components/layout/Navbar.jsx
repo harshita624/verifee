@@ -18,6 +18,8 @@ const NAV = [
   { label: "Compare Cities", href: "/compare"     },
   { label: "Translate",      href: "/translate"   },
   { label: "Scam Feed",      href: "/scam-feed"   },
+  { label: "Travel",         href: "/travel"      },
+  { label: "Merchant",       href: "/merchant"    },
   { label: "Pricing",        href: "/pricing"     },
 ];
 

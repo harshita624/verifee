@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { useLocation } from "@/hooks/useLocation";
+import CategoryDetailsFields from "@/components/CategoryDetailsFields";
 import { CATEGORIES } from "@/lib/utils";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
@@ -151,6 +152,8 @@ export default function ContributePage() {
   const [step,   setStep]   = useState(1);
   const [saving, setSaving] = useState(false);
   const [receiptFile, setReceiptFile] = useState(null);
+  const [receiptScanning, setReceiptScanning] = useState(false);
+  const [receiptScanMessage, setReceiptScanMessage] = useState("");
   const [done,   setDone]   = useState(false);
   const [submissionResult, setSubmissionResult] = useState(null);
   const [error,  setError]  = useState("");
@@ -165,6 +168,7 @@ export default function ContributePage() {
     marketName: "",
     shopName:   "",
     notes:      "",
+    details:    {},
   });
 
   // Pre-fill city from location
@@ -173,6 +177,67 @@ export default function ContributePage() {
   }, [city]);
 
   const updateForm = (key, val) => setForm((prev) => ({ ...prev, [key]: val }));
+
+  const handleReceiptSelect = async (event) => {
+    const file = event.target.files?.[0] || null;
+    setReceiptFile(file);
+    setReceiptScanMessage("");
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      setReceiptScanMessage("PDF attached. Automatic extraction currently reads JPG, PNG, and WebP images; enter the details manually.");
+      return;
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      setReceiptScanMessage("This file is over 8 MB. Choose a smaller receipt image.");
+      return;
+    }
+
+    setReceiptScanning(true);
+    try {
+      const dataUrl = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(new Error("Could not read the image file."));
+        reader.readAsDataURL(file);
+      });
+      const token = localStorage.getItem("vf_token");
+      const response = await fetch(`${API}/api/v1/ai/parse-receipt`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(token && { Authorization: `Bearer ${token}` }) },
+        body: JSON.stringify({ imageBase64: String(dataUrl).split(",")[1], mimeType: file.type }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.message || "Receipt scan failed.");
+
+      const extracted = payload.data || {};
+      const firstItem = extracted.items?.[0];
+      const product = String(extracted.product || firstItem?.name || "").trim();
+      const price = extracted.product && Number(extracted.amount) > 0
+        ? Number(extracted.amount)
+        : Number(firstItem?.charged) > 0
+        ? Number(firstItem.charged)
+        : Number(extracted.amount) > 0
+        ? Number(extracted.amount)
+        : extracted.items?.reduce((sum, item) => sum + (Number(item.charged) || 0), 0);
+      const categoryText = String(extracted.category || "").toLowerCase();
+      const category = categoryText ? CATEGORIES.find((item) => item.id === categoryText || item.label.toLowerCase().includes(categoryText) || categoryText.includes(item.id)) : null;
+      setForm((prev) => ({
+        ...prev,
+        product: prev.product || product,
+        pricePaid: prev.pricePaid || (price > 0 ? String(Math.round(price * 100) / 100) : ""),
+        shopName: prev.shopName || String(extracted.shopName || extracted.merchantName || "").trim(),
+        city: prev.city || String(extracted.city || "").trim(),
+        category: prev.category || category?.id || "",
+      }));
+      setReceiptScanMessage(product || price > 0
+        ? "Receipt details found. Review the extracted values and correct anything the scan misread."
+        : "The image was read, but Verifee could not confidently find a product or price. Please enter them manually.");
+    } catch (error) {
+      setReceiptScanMessage(error.message || "Receipt scan failed. You can still attach it and enter details manually.");
+    } finally {
+      setReceiptScanning(false);
+    }
+  };
 
   const canProceed = () => {
     if (step === 1) return form.product.trim().length > 1;
@@ -214,6 +279,7 @@ export default function ContributePage() {
           category:   form.category === "other" ? form.customCat : form.category,
           pricePaid:  Number(form.pricePaid),
           quality:    form.quality,
+          details:    form.details,
           city:       form.city.trim(),
           marketName: form.marketName.trim(),
           shopName:   form.shopName.trim(),
@@ -256,7 +322,7 @@ export default function ContributePage() {
           </p>
           <div className="flex flex-col sm:flex-row gap-3 justify-center">
             <button
-              onClick={() => { setDone(false); setSubmissionResult(null); setStep(1); setReceiptFile(null); setForm({ product:"",category:"",customCat:"",pricePaid:"",quality:"good",city:"",marketName:"",shopName:"",notes:"" }); }}
+              onClick={() => { setDone(false); setSubmissionResult(null); setStep(1); setReceiptFile(null); setReceiptScanMessage(""); setForm({ product:"",category:"",customCat:"",pricePaid:"",quality:"good",city:"",marketName:"",shopName:"",notes:"",details:{} }); }}
               className="flex items-center justify-center gap-2 btn-green text-[14px] px-6 py-3 rounded-xl"
             >
               <Plus className="w-4 h-4" /> Contribute another price
@@ -368,6 +434,8 @@ export default function ContributePage() {
                     </select>
                   </div>
 
+                  <CategoryDetailsFields category={form.category === "other" ? form.customCat : form.category} value={form.details} onChange={(details) => updateForm("details", details)} />
+
                   {form.category === "other" && (
                     <input
                       type="text"
@@ -390,7 +458,7 @@ export default function ContributePage() {
 
                   <div>
                     <label className="block text-[11px] font-semibold text-zinc-500 uppercase tracking-wide mb-1.5">
-                      Price you paid (₹) *
+                      {form.category === "hotels" ? "Room price per night (₹) *" : "Price you paid (₹) *"}
                     </label>
                     <div className="flex items-center gap-2 bg-white rounded-xl border border-zinc-200 px-3.5 py-2.5 focus-within:border-green-400 transition-colors">
                       <span className="text-[18px] font-bold text-zinc-400">₹</span>
@@ -520,11 +588,13 @@ export default function ContributePage() {
                         id="receipt-upload"
                         type="file"
                         accept="image/jpeg,image/png,image/webp,application/pdf"
-                        onChange={(e) => setReceiptFile(e.target.files?.[0] || null)}
+                        onChange={handleReceiptSelect}
                         className="block w-full text-[13px] text-zinc-600 file:mr-3 file:rounded-lg file:border-0 file:bg-green-50 file:px-3 file:py-2 file:font-semibold file:text-green-700 hover:file:bg-green-100"
                       />
                       <p className="mt-2 text-[11px] text-zinc-400">JPG, PNG, WebP, or PDF · up to 8 MB. The receipt link appears only in your account.</p>
                       {receiptFile && <p className="mt-2 flex items-center gap-1.5 text-[12px] font-medium text-green-700"><FileText className="w-3.5 h-3.5" />{receiptFile.name}</p>}
+                      {receiptScanning && <p className="mt-2 flex items-center gap-1.5 text-[12px] text-blue-700"><Loader2 className="w-3.5 h-3.5 animate-spin" />Reading receipt details…</p>}
+                      {receiptScanMessage && <p className="mt-2 text-[12px] text-zinc-600">{receiptScanMessage}</p>}
                     </div>
                   </div>
 
