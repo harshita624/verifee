@@ -111,6 +111,10 @@ export default function PayPalButton({
               }
               return { orderId };
             });
+          // PayPal may replace an order-creation rejection with its generic
+          // hosted error page. Observe this promise separately so the actual
+          // backend/API message is always shown in Verifee after the popup.
+          orderPromise.catch(reportError);
           session.start({ presentationMode: "auto" }, orderPromise).catch(reportError);
         };
         button.addEventListener("click", clickHandler);
