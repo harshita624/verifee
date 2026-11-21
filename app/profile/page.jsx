@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 
-const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
+import { API_BASE as API } from "@/lib/api";
 
 const LANGS   = ["English","Hindi","Tamil","Telugu","Kannada","Malayalam","Marathi","Bengali","Gujarati","Punjabi","Odia"];
 const TRAVEL  = ["Rarely","Occasionally","Monthly","Weekly","Digital Nomad"];

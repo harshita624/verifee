@@ -7,7 +7,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 
-const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
+import { API_BASE as API } from "@/lib/api";
 
 const CITIES = [
   "Delhi","Mumbai","Jaipur","Agra","Varanasi","Srinagar","Goa",

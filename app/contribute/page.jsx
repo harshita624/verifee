@@ -12,7 +12,7 @@ import { useLocation } from "@/hooks/useLocation";
 import CategoryDetailsFields from "@/components/CategoryDetailsFields";
 import { CATEGORIES } from "@/lib/utils";
 
-const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
+import { API_BASE as API } from "@/lib/api";
 
 const STEPS = [
   { id: 1, label: "Product",  desc: "What did you buy?"     },

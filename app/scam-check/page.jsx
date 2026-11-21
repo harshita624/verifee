@@ -12,7 +12,7 @@ import { formatPrice, CATEGORIES } from "@/lib/utils";
 import { useLocation } from "@/hooks/useLocation";
 import CategoryDetailsFields, { inferCategoryFromProduct } from "@/components/CategoryDetailsFields";
 
-const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
+import { API_BASE as API } from "@/lib/api";
 
 function ScamMeter({ probability }) {
   const color = probability>=70?"#dc2626":probability>=40?"#f59e0b":"#16a34a";

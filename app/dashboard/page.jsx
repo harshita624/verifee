@@ -10,7 +10,7 @@ import {
 import { useAuth } from "@/hooks/useAuth";
 import { api } from "@/lib/payments";
 
-const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
+import { API_BASE as API } from "@/lib/api";
 
 const QUICK_ACTIONS = [
   { label: "Check Price",    href: "/check-price",  icon: Shield,        color: "#16a34a", bg: "#f0fdf4" },

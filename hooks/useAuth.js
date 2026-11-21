@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { API_BASE } from "@/lib/api";
 
 let globalUser = null;
 let listeners = [];
@@ -33,7 +34,7 @@ export function useAuth() {
 
       if (!authCheckPromise) {
         const version = authVersion;
-        const authUrl = `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000"}/api/v1/auth/me`;
+        const authUrl = `${API_BASE}/api/v1/auth/me`;
         const request = fetch(authUrl, { credentials: "include" })
           .then(async (response) => {
             const data = await response.json().catch(() => null);
@@ -64,7 +65,7 @@ export function useAuth() {
   }, []);
 
   const logout = useCallback(() => {
-    const api = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
+    const api = API_BASE;
     fetch(`${api}/api/v1/auth/logout`, { method: "POST", credentials: "include" })
       .catch(() => {})
       .finally(() => {

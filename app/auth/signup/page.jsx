@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { Shield, Eye, EyeOff, ArrowRight, Check } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 
-const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
+import { API_BASE as API } from "@/lib/api";
 
 function safeNext() {
   if (typeof window === "undefined") return "/dashboard";

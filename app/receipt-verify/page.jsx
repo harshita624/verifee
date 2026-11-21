@@ -6,7 +6,7 @@ import {
   AlertTriangle, TrendingDown, X,
 } from "lucide-react";
 
-const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
+import { API_BASE as API } from "@/lib/api";
 
 export default function ReceiptVerifyPage() {
   const [file,     setFile]    = useState(null);

@@ -13,7 +13,7 @@ import { CATEGORIES, formatPrice } from "@/lib/utils";
 import { useLocation } from "@/hooks/useLocation";
 import CategoryDetailsFields, { inferCategoryFromProduct } from "@/components/CategoryDetailsFields";
 
-const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
+import { API_BASE as API } from "@/lib/api";
 
 // ── Price result display ──────────────────────────────────────────────────────
 function PriceResult({ result }) {

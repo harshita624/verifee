@@ -6,7 +6,7 @@ import { useParams, useRouter } from "next/navigation";
 import { Shield, Eye, EyeOff, Lock, Loader2, AlertTriangle } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 
-const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
+import { API_BASE as API } from "@/lib/api";
 
 export default function ResetPasswordPage() {
   const { token } = useParams();

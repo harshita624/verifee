@@ -4,7 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { Shield, ArrowLeft, Mail, CheckCircle, Loader2, AlertTriangle } from "lucide-react";
 
-const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
+import { API_BASE as API } from "@/lib/api";
 
 export default function ForgotPage() {
   const [email,   setEmail]   = useState("");

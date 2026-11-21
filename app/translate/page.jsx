@@ -8,7 +8,7 @@ import { LANGUAGES } from "@/lib/utils";
 
 // FIX: this page used the relative URL "/api/v1/ai/translate", which hits the
 // Next.js server (404 on Vercel) instead of the Express API like every other page.
-const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
+import { API_BASE as API } from "@/lib/api";
 
 const QUICK_PHRASES = [
   "What is your best price?",

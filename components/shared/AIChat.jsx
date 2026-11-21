@@ -5,7 +5,7 @@ import {
 } from "react";
 import { X, Send, Plus, MessageSquare, User, History } from "lucide-react";
 
-const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
+import { API_BASE as API } from "@/lib/api";
 
 function ChatIcon({ size = 16, color = "currentColor", strokeWidth = 2 }) {
   return (

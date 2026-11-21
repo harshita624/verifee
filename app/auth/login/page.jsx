@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { Shield, Eye, EyeOff, ArrowRight } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 
-const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
+import { API_BASE as API } from "@/lib/api";
 
 // Only allow same-site relative paths, never an external URL (open-redirect safe).
 function safeNext() {

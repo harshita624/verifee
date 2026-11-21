@@ -10,7 +10,7 @@ import { useLocation } from "@/hooks/useLocation";
 import { CATEGORIES } from "@/lib/utils";
 import { useAuth } from "@/hooks/useAuth";
 
-const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
+import { API_BASE as API } from "@/lib/api";
 
 const SEVERITY = {
   high:   { label: "High risk",   color: "#dc2626", bg: "#fef2f2" },
