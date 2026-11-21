@@ -8,9 +8,9 @@ export const metadata = { title: "Cookie Policy — Verifee" };
 
 const ITEMS = [
   {
-    name: "vf_token",
-    where: "Local storage",
-    purpose: "Keeps you signed in. It holds your login token until you sign out or it expires.",
+    name: "vf_session",
+    where: "HttpOnly cookie",
+    purpose: "Keeps you signed in. The token is HttpOnly and Secure in production, so JavaScript cannot read it; it expires or is cleared when you sign out.",
     kind: "Essential",
   },
   {

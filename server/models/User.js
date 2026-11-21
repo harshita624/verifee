@@ -17,6 +17,7 @@ const userSchema = new mongoose.Schema({
   language: { type: String, default: "English" },
   role: { type: String, enum: ["user", "admin", "moderator"], default: "user" },
   isActive:{type:Boolean,default:true},
+  authVersion: { type: Number, default: 0, select: false },
 
   xp: { type: Number, default: 0 },
   level: { type: Number, default: 1 },
@@ -25,8 +26,19 @@ const userSchema = new mongoose.Schema({
   contributionCount: { type: Number, default: 0 },
   plan:{type:String,enum:["free","pro"],default:"free"},
   planExpires:{type:Date},
+  planGrants: {
+    type: [{
+      _id: false,
+      paymentId: { type: mongoose.Schema.Types.ObjectId, ref: "Payment", required: true },
+      start: { type: Date, required: true },
+      end: { type: Date, required: true },
+      durationMs: { type: Number, required: true },
+    }],
+    default: [],
+    select: false,
+  },
   aiUsage:{
-    data:{type:String},
+    date:{type:String},
     count:{type:Number,default:0},
   },
 
@@ -59,6 +71,8 @@ userSchema.methods.toJSON = function () {
   delete obj.passwordResetToken;
   delete obj.passwordResetExpires;
   delete obj.aiUsage;
+  delete obj.authVersion;
+  delete obj.planGrants;
   delete obj.__v;
   obj.isPro = this.isProActive();
   return obj;

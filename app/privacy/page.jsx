@@ -19,7 +19,7 @@ const SECTIONS = [
     h: "What we collect",
     ul: [
       "Account details: your name and email address, and a password that we store only as a one-way hash. Optional profile fields you add: phone number, city, country, language, bio, travel frequency and avatar link.",
-      "Contributions: price reports and scam reports you submit (product, price, city, market, shop, notes). Your name may be shown next to scam reports you submit while signed in. The public leaderboard shows only your first name and last initial.",
+      "Contributions: price reports and scam reports you submit (product, price, city, market, shop and notes). Public scam reports identify signed-in authors only as “Community member”; price-report contributor names are shortened to a first name and last initial. The public leaderboard also shows only your first name and last initial.",
       "Payment records: the plan or purchase, amount, currency, status, timestamps, PayPal order and capture IDs, the payer email PayPal returns, refund details, and the UPI transaction ID (UTR) you submit. We also keep what you tell us the payment is for (for example transport or food) and, if you cancel checkout, the reason you give. We never see or store your card number. PayPal handles card and wallet details.",
       "What you send to our AI features: product names, prices, cities, chat messages and receipt photos you choose to upload.",
       "Technical data: your IP address and request metadata, used for rate limiting, free-quota counting, security and troubleshooting.",

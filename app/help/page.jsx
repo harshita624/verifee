@@ -20,8 +20,8 @@ const GROUPS = [
         a: "Vague item names give wide ranges. “Bed” could be anything from a basic frame to carved teak. Add size, material or quality, for example “wooden double bed”, for a tighter estimate.",
       },
       {
-        q: "How is the scam probability calculated?",
-        a: "It compares your quote with verified prices paid by other shoppers when those are available. If there is not enough community data, it compares your quote with an estimated fair-price range. Quotes inside the range are treated as fair, and risk rises as the quote moves above it.",
+        q: "How is the price risk indicator calculated?",
+        a: "It compares your quote with admin-reviewed, receipt-backed community prices when enough are available. Otherwise, it compares the quote with an estimated fair-price range. The score is a guide, not a calibrated probability or proof that a seller committed fraud.",
       },
       {
         q: "Which languages does the translator support?",
@@ -63,11 +63,11 @@ const GROUPS = [
       },
       {
         q: "How do I contribute a price?",
-        a: "Open Contribute, enter what you bought, what you paid and where. Plausible prices are verified automatically and earn XP. Prices that look far off are held for review.",
+        a: "Open Contribute, enter what you bought, what you paid and where. Submitting a price report earns 50 XP. It is marked as shared while it waits for human review; approved reports can inform price estimates.",
       },
       {
         q: "How do I report a scam?",
-        a: "Open the Scam Feed and press “Report a scam”. Include what was charged and what you think was fair. If you are signed in you earn 40 XP for up to 3 reports a day.",
+        a: "Open the Scam Feed and press “Report a scam”. Include what was charged and what you think was fair. Reports are community-submitted allegations and are not currently independently reviewed or rewarded with XP.",
       },
       {
         q: "How do I delete my account?",

@@ -3,6 +3,7 @@ const cors = require("cors");
 const helmet = require("helmet");
 const morgan = require("morgan");
 const rateLimit = require("express-rate-limit");
+const mongoose = require("mongoose");
 require("dotenv").config();
 
 const connectDB = require("./config/db");
@@ -10,6 +11,7 @@ const errorHandler = require("./middleware/errorHandler");
 const sanitizeInput = require("./middleware/sanitize");
 const { optionalAuth } = require("./middleware/auth");
 const { planGate } = require("./middleware/planGate");
+const MongoRateLimitStore = require("./services/mongoRateLimitStore");
 
 const authRoutes = require("./routes/auth");
 const priceRoutes = require("./routes/prices");
@@ -39,8 +41,6 @@ process.on("uncaughtException", (err) => {
 // Render sits behind one reverse proxy hop.
 app.set("trust proxy", 1);
 
-connectDB();
-
 // ── CORS ─────────────────────────────────────────────────────────────────────
 // FRONTEND_URL may hold several comma-separated origins.
 const allowedOrigins = [
@@ -55,11 +55,14 @@ const corsOptions = {
     if (!origin) return callback(null, true);
     if (allowedOrigins.includes(origin)) return callback(null, true);
     console.log("Blocked CORS origin:", origin);
-    return callback(new Error("Not allowed by CORS"));
+    const error = new Error("Not allowed by CORS");
+    error.statusCode = 403;
+    error.code = "CORS_ORIGIN_DENIED";
+    return callback(error);
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Session-Id"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Session-Id", "X-Auth-Transport"],
   exposedHeaders: ["X-Plan", "X-Free-Remaining"],
 };
 
@@ -69,17 +72,17 @@ app.options("*", cors(corsOptions));
 app.use(helmet());
 
 // ── Rate limiting ────────────────────────────────────────────────────────────
-const limiter = (windowMs, max) =>
-  rateLimit({ windowMs, max, standardHeaders: true, legacyHeaders: false });
+const limiter = (windowMs, max, prefix) =>
+  rateLimit({ windowMs, max, standardHeaders: true, legacyHeaders: false, store: new MongoRateLimitStore(prefix) });
 
-app.use("/api/v1/", limiter(15 * 60 * 1000, 150));
-app.use("/api/v1/auth/", limiter(15 * 60 * 1000, 20));
-app.use("/api/v1/ai/", limiter(60 * 1000, 30));
-app.use("/api/v1/payments/", limiter(15 * 60 * 1000, 60));
-app.use("/api/v1/payments/guard", limiter(60 * 1000, 15));
-app.use("/api/v1/travel/", limiter(60 * 1000, 30));
+app.use("/api/v1/", limiter(15 * 60 * 1000, 150, "api"));
+app.use("/api/v1/auth/", limiter(15 * 60 * 1000, 20, "auth"));
+app.use("/api/v1/ai/", limiter(60 * 1000, 30, "ai"));
+app.use("/api/v1/payments/", limiter(15 * 60 * 1000, 60, "payments"));
+app.use("/api/v1/payments/guard", limiter(60 * 1000, 15, "payment-guard"));
+app.use("/api/v1/travel/", limiter(60 * 1000, 30, "travel"));
 // Contact form: 5 messages per hour per IP
-app.use("/api/v1/contact", limiter(60 * 60 * 1000, 5));
+app.use("/api/v1/contact", limiter(60 * 60 * 1000, 5, "contact"));
 
 // ── Body parsing ─────────────────────────────────────────────────────────────
 // Only the AI routes need a large body (receipt images as base64). Everything
@@ -96,16 +99,22 @@ if (process.env.NODE_ENV !== "production") {
 }
 
 // ── Health ───────────────────────────────────────────────────────────────────
-app.get("/health", (req, res) => {
-  res.json({
-    status: "ok",
-    timestamp: new Date().toISOString(),
-    provider: process.env.AI_PROVIDER || "groq",
-    paypal: Boolean(process.env.PAYPAL_CLIENT_ID && process.env.PAYPAL_CLIENT_SECRET),
-    paypalEnv: process.env.PAYPAL_ENV === "live" ? "live" : "sandbox",
-    upi: Boolean(process.env.UPI_MERCHANT_VPA),
-    env: process.env.NODE_ENV || "development",
-  });
+// Health endpoints are public deployment probes. Return only probe status and
+// timing; provider and payment configuration stays private.
+const healthPayload = (status) => ({
+  status,
+  timestamp: new Date().toISOString(),
+});
+
+app.get("/health/live", (_req, res) => res.json({ status: "ok", timestamp: new Date().toISOString() }));
+app.get("/health/ready", (_req, res) => {
+  const ready = mongoose.connection.readyState === 1;
+  res.status(ready ? 200 : 503).json(healthPayload(ready ? "ready" : "not_ready"));
+});
+// Keep the existing monitor URL, but make it report readiness accurately.
+app.get("/health", (_req, res) => {
+  const ready = mongoose.connection.readyState === 1;
+  res.status(ready ? 200 : 503).json(healthPayload(ready ? "ok" : "not_ready"));
 });
 
 // ── Premium AI actions: free users get a daily quota, Pro is unlimited ──────
@@ -136,11 +145,27 @@ app.use((req, res) => {
 
 app.use(errorHandler);
 
-app.listen(PORT, () => {
-  console.log(
-    `Verifee server running on port ${PORT} | AI: ${process.env.AI_PROVIDER || "groq"} | ` +
-      `PayPal: ${process.env.PAYPAL_ENV === "live" ? "live" : "sandbox"}`
-  );
-});
+async function startServer() {
+  if (process.env.NODE_ENV === "production" &&
+      (!process.env.JWT_SECRET || Buffer.byteLength(process.env.JWT_SECRET, "utf8") < 32 ||
+       process.env.JWT_SECRET === "replace-with-a-long-random-secret")) {
+    throw new Error("JWT_SECRET must be a unique secret of at least 32 bytes in production.");
+  }
+  await connectDB();
+  return app.listen(PORT, () => {
+    console.log(
+      `Verifee server running on port ${PORT} | AI: ${process.env.AI_PROVIDER || "groq"} | ` +
+        `PayPal: ${process.env.PAYPAL_ENV === "live" ? "live" : "sandbox"}`
+    );
+  });
+}
+
+if (require.main === module) {
+  startServer().catch((err) => {
+    console.error("API startup failed:", err.message);
+    process.exit(1);
+  });
+}
 
 module.exports = app;
+module.exports.startServer = startServer;

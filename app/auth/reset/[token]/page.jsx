@@ -29,12 +29,12 @@ export default function ResetPasswordPage() {
     try {
       const res = await fetch(`${API}/api/v1/auth/reset-password/${encodeURIComponent(token)}`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        headers: { "Content-Type": "application/json", "X-Auth-Transport": "cookie" },
         body: JSON.stringify({ password }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || "Could not reset password");
-      localStorage.setItem("vf_token", data.data.token);
       setLoggedIn(data.data.user);
       router.push("/dashboard");
     } catch (err) {

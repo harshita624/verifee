@@ -78,16 +78,51 @@ exports.getConfig = (req, res) => {
 
 async function grantPlan(payment) {
   const plan = PLANS[payment.plan];
-  const user = await User.findById(payment.user);
-  if (!user || !plan) return;
-  const now = Date.now();
-  const base =
-    user.plan === "pro" && user.planExpires && user.planExpires.getTime() > now
-      ? user.planExpires.getTime()
-      : now;
-  user.plan = "pro";
-  user.planExpires = new Date(base + plan.days * 86_400_000);
-  await user.save({ validateBeforeSave: false });
+  if (!plan) return;
+  const now = new Date();
+  const durationMs = plan.days * 86_400_000;
+  const start = { $max: [{ $ifNull: ["$planExpires", { $literal: now }] }, { $literal: now }] };
+  const end = { $add: [start, durationMs] };
+  const user = await User.findOneAndUpdate(
+    { _id: payment.user, "planGrants.paymentId": { $ne: payment._id } },
+    [{ $set: {
+      plan: "pro",
+      planExpires: end,
+      planGrants: {
+        $concatArrays: [
+          { $ifNull: ["$planGrants", []] },
+          [{
+            paymentId: { $literal: payment._id },
+            start,
+            end,
+            durationMs: { $literal: durationMs },
+          }],
+        ],
+      },
+    } }],
+    { new: true }
+  ).select("+planGrants");
+  const current = user || await User.findById(payment.user).select("+planGrants");
+  const grant = current?.planGrants?.find((item) => String(item.paymentId) === String(payment._id));
+  if (!grant) throw new Error("Could not persist the Pro plan entitlement.");
+  const marked = await Payment.updateOne(
+    { _id: payment._id, status: "captured" },
+    { $set: { planGrantStart: grant.start, planGrantEnd: grant.end, planEntitlementApplied: true } }
+  );
+  if (!marked.matchedCount) {
+    const paymentState = await Payment.findById(payment._id).select("status").lean();
+    if (paymentState?.status === "refunded") {
+      const now = new Date();
+      const fallbackExpiry = grant.start > now ? grant.start : now;
+      await User.findOneAndUpdate(
+        { _id: payment.user, planExpires: grant.end, "planGrants.paymentId": payment._id },
+        {
+          $set: { plan: fallbackExpiry > now ? "pro" : "free", planExpires: fallbackExpiry > now ? fallbackExpiry : null },
+          $pull: { planGrants: { paymentId: payment._id } },
+        }
+      );
+    }
+  }
 }
 
 /**
@@ -95,7 +130,7 @@ async function grantPlan(payment) {
  * capture racing each other can never grant the plan twice.
  */
 async function fulfil(paymentId, info = {}) {
-  const set = { status: "captured", fulfilledAt: new Date() };
+  const set = { status: "captured", fulfilledAt: new Date(), planEntitlementApplied: false };
   if (info.captureId) set.paypalCaptureId = info.captureId;
   if (info.payerEmail) set.payerEmail = info.payerEmail;
   if (info.payerId) set.payerId = info.payerId;
@@ -106,7 +141,16 @@ async function fulfil(paymentId, info = {}) {
     { $set: set },
     { new: true }
   );
-  if (!payment) return { payment: await Payment.findById(paymentId), duplicate: true };
+  if (!payment) {
+    const existing = await Payment.findById(paymentId);
+    // Retry a failed entitlement side effect on a duplicate capture/webhook;
+    // grantPlan is idempotent per payment.
+    if (existing?.status === "captured" && existing.kind === "pro_plan" && existing.planEntitlementApplied === false) {
+      try { await grantPlan(existing); }
+      catch (err) { console.error("plan entitlement retry failed", String(existing._id), err.message); }
+    }
+    return { payment: existing, duplicate: true };
+  }
 
   try {
     if (payment.kind === "pro_plan") await grantPlan(payment);
@@ -501,25 +545,74 @@ async function findPaymentForEvent(resource) {
   return captureId ? Payment.findOne({ paypalCaptureId: captureId }) : null;
 }
 
-async function markRefunded(payment, refundId, when) {
+async function markRefunded(payment, resource, isReversal = false) {
+  const refundId = resource.id;
+  const currency = resource.amount?.currency_code || payment.currency;
+  const priorRefund = Number(payment.refund?.amount) || 0;
+  const amount = isReversal
+    ? Math.max(0, Number(payment.amount) - priorRefund)
+    : Number(resource.amount?.value);
+
+  // A signed PayPal event is still checked against our stored charge. Partial
+  // refunds accumulate; they do not mark the whole payment refunded.
+  if (!refundId || !Number.isFinite(amount) || amount <= 0 || currency !== payment.currency) return;
+
   const updated = await Payment.findOneAndUpdate(
-    { _id: payment._id, status: "captured" },
-    { $set: { status: "refunded", "refund.id": refundId, "refund.at": when ? new Date(when) : new Date(), "refund.status": "completed", "refund.amount": Number(payment.amount), "refund.currency": payment.currency } },
+    {
+      _id: payment._id,
+      status: "captured",
+      refundIds: { $ne: refundId },
+      "refund.id": { $ne: refundId },
+    },
+    [{ $set: {
+      "refund.amount": {
+        $min: [
+          { $literal: Number(payment.amount) },
+          { $add: [{ $ifNull: ["$refund.amount", 0] }, { $literal: amount }] },
+        ],
+      },
+      refundIds: { $setUnion: [{ $ifNull: ["$refundIds", []] }, { $literal: [refundId] }] },
+      "refund.id": { $literal: refundId },
+      "refund.at": { $literal: resource.create_time ? new Date(resource.create_time) : new Date() },
+      "refund.status": { $literal: isReversal ? "reversed" : "partially_refunded" },
+      "refund.currency": { $literal: currency },
+    } }],
     { new: true }
   );
-  if (!updated || updated.kind !== "pro_plan") return;
+  if (!updated) return;
 
-  const plan = PLANS[updated.plan];
-  const user = await User.findById(updated.user);
-  if (!user || !plan || !user.planExpires) return;
-  const expires = user.planExpires.getTime() - plan.days * 86_400_000;
-  if (expires <= Date.now()) {
-    user.plan = "free";
-    user.planExpires = undefined;
-  } else {
-    user.planExpires = new Date(expires);
-  }
-  await user.save({ validateBeforeSave: false });
+  if (!isReversal && updated.refund.amount < updated.amount - 0.009) return;
+
+  // The status transition makes plan revocation happen at most once even if
+  // two refund events arrive together.
+  const fullyRefunded = await Payment.findOneAndUpdate(
+    { _id: payment._id, status: "captured" },
+    { $set: { status: "refunded", "refund.status": isReversal ? "reversed" : "completed" } },
+    { new: true }
+  );
+  if (!fullyRefunded || fullyRefunded.kind !== "pro_plan") return;
+
+  if (!fullyRefunded.planGrantStart || !fullyRefunded.planGrantEnd) return;
+  const now = new Date();
+  // Only remove this grant when it is still the last active/future extension.
+  // A refund for an older purchase must not shorten time bought later.
+  if (fullyRefunded.planGrantEnd <= now) return;
+  const nextExpiry = fullyRefunded.planGrantStart > now ? fullyRefunded.planGrantStart : now;
+  await User.findOneAndUpdate(
+    {
+      _id: fullyRefunded.user,
+      planExpires: fullyRefunded.planGrantEnd,
+      "planGrants.paymentId": fullyRefunded._id,
+    },
+    {
+      $set: {
+        plan: nextExpiry > now ? "pro" : "free",
+        planExpires: nextExpiry > now ? nextExpiry : null,
+      },
+      $pull: { planGrants: { paymentId: fullyRefunded._id } },
+    },
+    { new: true }
+  );
 }
 
 exports.webhook = async (req, res) => {
@@ -561,7 +654,7 @@ exports.webhook = async (req, res) => {
       );
     } else {
       // REFUNDED or REVERSED
-      await markRefunded(payment, resource.id, resource.create_time);
+      await markRefunded(payment, resource, type === "PAYMENT.CAPTURE.REVERSED");
     }
 
     await Payment.updateOne(

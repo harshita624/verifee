@@ -18,11 +18,11 @@ const FAQS = [
   },
   {
     q: "Can I trust the community prices?",
-    a: "Reports are checked for price plausibility before they count toward community estimates. The estimate shows how many verified reports it used. Compare that range with the item's quality, route, or other details before deciding.",
+    a: "A price report counts toward community estimates after an admin reviews its receipt. The estimate shows how many approved reports it used. Compare the range with the item's quality and other details before deciding.",
   },
   {
     q: "How does the scam detector work?",
-    a: "Enter the product name, the price you were quoted, and your location. Our AI compares it against community-verified prices, calculates the overcharging percentage, and gives you a scam probability score along with negotiation advice.",
+    a: "Enter the product name, the price you were quoted, and your location. Verifee compares it against admin-reviewed community prices or an estimated range, then gives a risk indicator and negotiation advice. The score is guidance, not proof of fraud.",
   },
   {
     q: "What languages does the translator support?",

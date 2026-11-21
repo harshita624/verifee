@@ -1,13 +1,12 @@
 const PriceReport = require("../models/PriceReport");
 const aiService = require("../services/aiService");
-const priceEngine = require("../services/priceEngine");
 const { escapeRegex } = require("../utils/regex");
 const { awardXp } = require("../utils/xp");
 const crypto = require("crypto");
 const path = require("path");
 const ReceiptAsset = require("../models/ReceiptAsset");
-const { normalizeProductName, productNameRegex } = require("../utils/productName");
-const { normalizeCategory, categoryFilter, cleanComparisonDetails, detailsFilter } = require("../utils/category");
+const { productNameRegex } = require("../utils/productName");
+const { normalizeCategory, categoryFilter, cleanComparisonDetails } = require("../utils/category");
 
 const DAILY_REPORT_LIMIT = 25;
 
@@ -19,6 +18,9 @@ const displayContributor = (name) => {
 };
 
 const anonymizeContributors = (reports) => reports.map((report) => {
+  // Legacy records may carry the old automatic plausibility flag. Only human
+  // approval in the current workflow should be presented as verification.
+  report.isVerified = report.verificationStatus === "approved" && report.isVerified === true;
   if (report.submittedBy) {
     report.submittedBy = { name: displayContributor(report.submittedBy.name) };
   }
@@ -29,9 +31,10 @@ exports.getReports = async (req, res, next) => {
   try {
     const { product, city, category, quality } = req.query;
     const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100);
-    const page = Math.max(Number(req.query.page) || 1, 1);
+    const requestedPage = Number.parseInt(req.query.page, 10);
+    const page = Number.isFinite(requestedPage) && requestedPage > 0 ? Math.min(requestedPage, 10_000) : 1;
 
-    const filter = {};
+    const filter = { verificationStatus: { $ne: "rejected" } };
     if (product) filter.product = productNameRegex(product);
     if (city) filter.city = ci(city);
     if (category) Object.assign(filter, categoryFilter(category, product));
@@ -45,12 +48,12 @@ exports.getReports = async (req, res, next) => {
         .sort({ createdAt: -1 })
         .limit(limit)
         .skip((page - 1) * limit)
-        .select("-receiptUrl -receiptAssetId -images -ocrData")
+        .select("-receiptUrl -receiptAssetId -images -ocrData -gpsLat -gpsLng")
         .populate("submittedBy", "name")
         .lean(),
       PriceReport.countDocuments(filter),
       PriceReport.aggregate([
-        { $match: filter },
+        { $match: { ...filter, verificationStatus: "approved", isVerified: true } },
         {
           $group: {
             _id: null,
@@ -79,9 +82,10 @@ exports.getMyReports = async (req, res, next) => {
     const reports = await PriceReport.find({ submittedBy: req.user._id })
       .sort({ createdAt: -1 })
       .limit(100)
-      .select("product category pricePaid shopName city marketName quality notes receiptUrl receiptAssetId isVerified helpfulVotes createdAt")
+      .select("product category pricePaid shopName city marketName quality notes receiptUrl receiptAssetId isVerified verificationStatus helpfulVotes createdAt")
       .lean();
     const data = await Promise.all(reports.map(async (report) => {
+      report.isVerified = report.verificationStatus === "approved" && report.isVerified === true;
       if (report.receiptAssetId) {
         const assetFilter = { _id: report.receiptAssetId, owner: req.user._id };
         let asset = await ReceiptAsset.findOne(assetFilter).select("+downloadToken +downloadTokenExpiresAt");
@@ -197,41 +201,6 @@ exports.uploadReceipt = async (req, res, next) => {
   }
 };
 
-/**
- * FIX: reports were saved with isVerified=false and every ML/RAG query filters
- * on isVerified=true, so "community_verified" data could never exist and the
- * whole statistical pipeline silently fell back to AI estimates.
- *
- * A report is now auto-verified when its price is plausible: compared with the
- * median of existing reports for the same product+city when there are 3+, or
- * against the AI fair-price range otherwise. Implausible prices stay unverified.
- */
-async function isPlausible(product, city, category, quality, price, details = {}) {
-  const canonicalCategory = normalizeCategory(category, product);
-  const existing = await PriceReport.find({ product: productNameRegex(product), city: ci(city), ...categoryFilter(canonicalCategory, product), ...detailsFilter(canonicalCategory, details), quality: quality || "good", isVerified: true })
-    .select("pricePaid")
-    .limit(200)
-    .lean();
-
-  if (existing.length >= 3) {
-    const sorted = existing.map((r) => r.pricePaid).sort((a, b) => a - b);
-    const median = sorted[Math.floor(sorted.length / 2)];
-    return median > 0 && price >= median * 0.3 && price <= median * 3;
-  }
-
-  try {
-    const est = await priceEngine.estimate({ product: normalizeProductName(product), city, category, quality, details });
-    const hotelNights = canonicalCategory === "hotels" ? Number(normalizedDetails.nights) : 1;
-    const multiplier = canonicalCategory === "hotels" && est.dataSource === "ai_estimate" && Number.isFinite(hotelNights) && hotelNights > 0 ? hotelNights : 1;
-    const lo = Number(est.fairMin) * multiplier;
-    const hi = Number(est.fairMax) * multiplier;
-    if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi <= 0) return false;
-    return price >= lo * 0.35 && price <= hi * 2.5;
-  } catch {
-    return false;
-  }
-}
-
 exports.createReport = async (req, res, next) => {
   try {
     const {
@@ -281,8 +250,6 @@ exports.createReport = async (req, res, next) => {
     const normalizedCategory = normalizeCategory(category, product);
     const normalizedQuality = ["poor", "fair", "good", "excellent"].includes(String(quality).toLowerCase()) ? String(quality).toLowerCase() : "good";
     const normalizedDetails = cleanComparisonDetails(normalizedCategory, details);
-    const verified = await isPlausible(product.trim(), city.trim(), normalizedCategory, normalizedQuality, price, normalizedDetails);
-
     const report = await PriceReport.create({
       product: product.trim(),
       category: normalizedCategory,
@@ -299,19 +266,18 @@ exports.createReport = async (req, res, next) => {
       receiptUrl,
       receiptAssetId,
       submittedBy: req.user._id,
-      isVerified: verified,
-      aiConfidence: verified ? 70 : 0,
+      verificationStatus: "pending",
+      isVerified: false,
+      aiConfidence: 0,
     });
 
-    const xpAwarded = verified ? 80 : 50; // 50 for submitting + 30 when it verifies
+    const xpAwarded = 50;
     await awardXp(req.user._id, xpAwarded, { contributionCount: 1 });
 
     res.status(201).json({
       success: true,
       data: report,
-      message: verified
-        ? `Price report passed plausibility screening. You earned ${xpAwarded} XP.`
-        : "Price report saved for screening. You earned 50 XP.",
+      message: `Price report submitted for human review. You earned ${xpAwarded} XP.`,
       xpAwarded,
     });
   } catch (err) {
@@ -324,7 +290,7 @@ exports.getProductStats = async (req, res, next) => {
     const product = decodeURIComponent(req.params.product);
     const { city, category, quality } = req.query;
 
-    const match = { product: productNameRegex(product), isVerified: true };
+    const match = { product: productNameRegex(product), verificationStatus: "approved", isVerified: true };
     if (city) match.city = ci(city);
     if (category) Object.assign(match, categoryFilter(category, product));
     if (["poor", "fair", "good", "excellent"].includes(String(quality || ""))) {
@@ -357,6 +323,63 @@ exports.getProductStats = async (req, res, next) => {
   } catch (err) {
     next(err);
   }
+};
+
+exports.getPendingReports = async (_req, res, next) => {
+  try {
+    const reports = await PriceReport.find({ $or: [{ verificationStatus: "pending" }, { verificationStatus: { $exists: false } }] })
+      .sort({ createdAt: 1 }).limit(100)
+      .select("product category pricePaid shopName city state marketName quality details notes receiptUrl receiptAssetId ocrData verificationStatus isVerified submittedBy createdAt")
+      .populate("submittedBy", "name email").lean();
+    res.set("Cache-Control", "private, no-store");
+    res.json({ success: true, data: reports });
+  } catch (err) { next(err); }
+};
+
+exports.reviewReport = async (req, res, next) => {
+  try {
+    const status = req.body.status;
+    if (!["approved", "rejected"].includes(status)) {
+      return res.status(400).json({ success: false, message: "Status must be approved or rejected." });
+    }
+    const filter = {
+      _id: req.params.id,
+      $or: [{ verificationStatus: "pending" }, { verificationStatus: { $exists: false } }],
+    };
+    if (status === "approved") {
+      filter.$and = [{ $or: [{ receiptUrl: { $exists: true, $ne: "" } }, { receiptAssetId: { $exists: true, $ne: null } }] }];
+    }
+    const update = {
+      $set: {
+        verificationStatus: status,
+        isVerified: status === "approved",
+        moderationNote: String(req.body.note || "").trim().slice(0, 300) || undefined,
+      },
+    };
+    if (status === "approved") update.$set.verifiedBy = req.user._id;
+    else update.$unset = { verifiedBy: 1 };
+    const report = await PriceReport.findOneAndUpdate(filter, update, { new: true, runValidators: true });
+    if (!report) {
+      const current = await PriceReport.findById(req.params.id).select("verificationStatus receiptUrl receiptAssetId").lean();
+      if (!current) return res.status(404).json({ success: false, message: "Price report not found." });
+      if (current.verificationStatus && current.verificationStatus !== "pending") {
+        return res.status(409).json({ success: false, message: "This report has already been reviewed." });
+      }
+      return res.status(400).json({ success: false, message: "An uploaded receipt is required before approval." });
+    }
+    res.json({ success: true, data: report });
+  } catch (err) { next(err); }
+};
+
+exports.downloadAdminReceipt = async (req, res, next) => {
+  try {
+    if (!/^[a-f\d]{24}$/i.test(req.params.id)) return res.status(400).json({ success: false, message: "Receipt reference is invalid." });
+    const asset = await ReceiptAsset.findById(req.params.id).select("+data");
+    if (!asset) return res.status(404).json({ success: false, message: "Receipt not found." });
+    const safeFilename = path.basename(asset.filename).replace(/[\r\n"\\]/g, "_");
+    res.set({ "Content-Type": asset.contentType, "Content-Length": String(asset.data.length), "Content-Disposition": `${asset.contentType === "application/pdf" ? "attachment" : "inline"}; filename="${safeFilename}"`, "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff" });
+    res.send(asset.data);
+  } catch (err) { next(err); }
 };
 
 // FIX: a user could previously vote on the same report unlimited times.

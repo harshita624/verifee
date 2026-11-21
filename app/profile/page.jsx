@@ -91,10 +91,10 @@ function PasswordModal({ onClose }) {
     if(f.nxt!==f.cfm){setErr("Passwords do not match");return}
     setLoading(true);
     try{
-      const token=localStorage.getItem("vf_token");
       const res=await fetch(`${API}/api/v1/auth/change-password`,{
         method:"POST",
-        headers:{"Content-Type":"application/json",Authorization:`Bearer ${token}`},
+        credentials:"include",
+        headers:{"Content-Type":"application/json","X-Auth-Transport":"cookie"},
         body:JSON.stringify({currentPassword:f.cur,newPassword:f.nxt}),
       });
       const d=await res.json();
@@ -196,10 +196,10 @@ export default function ProfilePage() {
   const save=async()=>{
     setSaving(true);setError("");
     try{
-      const token=localStorage.getItem("vf_token");
       const res=await fetch(`${API}/api/v1/auth/me`,{
         method:"PATCH",
-        headers:{"Content-Type":"application/json",Authorization:`Bearer ${token}`},
+        credentials:"include",
+        headers:{"Content-Type":"application/json"},
         body:JSON.stringify(form),
       });
       const data=await res.json();

@@ -278,10 +278,10 @@ async function estimate({ product, city = "", place = "", category = "", quality
     };
   }
 
-  const dist = await mlService.getPriceDistribution(ctx.product, ctx.city, ctx.quality, ctx.category, ctx.details).catch(() => null);
+  const dist = await mlService.getPriceDistribution(ctx.product, ctx.city, ctx.quality, ctx.category, ctx.details, ctx.place).catch(() => null);
   const hasCommunity = !!dist && dist.count >= MIN_COMMUNITY_REPORTS;
   const trend = hasCommunity
-    ? await mlService.computePriceTrend(ctx.product, ctx.city, ctx.quality, ctx.category, ctx.details).catch(() => null)
+    ? await mlService.computePriceTrend(ctx.product, ctx.city, ctx.quality, ctx.category, ctx.details, ctx.place).catch(() => null)
     : null;
 
   let profile = null;
@@ -432,11 +432,13 @@ function judge(price, est, scamHistory = 0) {
   return { scamProbability: p, verdict: verdictFor(p), overpricingPercent, zScore };
 }
 
-async function scamHistoryCount(product, city, category) {
+async function scamHistoryCount(product, city, category, place = "") {
   try {
     const n = await ScamReport.countDocuments({
       product: productNameRegex(product),
       ...(city && { city: new RegExp(escapeRegex(city), "i") }),
+      ...(place && { marketName: new RegExp(escapeRegex(place), "i") }),
+      verified: true,
       ...categoryFilter(category, product),
     });
     return Math.min(n, 5);
@@ -468,7 +470,7 @@ async function assess({ product, city, place, category, quality, price, details 
       est.hint = `AI reference is per room per night and has been multiplied by ${nights} night(s). Taxes, fees, cancellation terms, and included facilities can change the total.`;
     }
   }
-  const scamHistory = await scamHistoryCount(est.product, est.city, est.category);
+  const scamHistory = await scamHistoryCount(est.product, est.city, est.category, est.place);
   return { est, scamHistory, ...judge(price, est, scamHistory) };
 }
 

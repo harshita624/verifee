@@ -61,7 +61,7 @@ export default function FairPayPage() {
   useEffect(() => {
     if (!form.city.trim()) { setMerchants([]); return; }
     const controller = new AbortController();
-    fetch(`${API}/api/v1/merchants/directory?city=${encodeURIComponent(form.city)}`, { signal: controller.signal })
+    fetch(`${API}/api/v1/merchants/directory?city=${encodeURIComponent(form.city)}`, { signal: controller.signal, credentials: "include" })
       .then((r) => r.json()).then((d) => setMerchants(d.success ? d.data : [])).catch(() => {});
     return () => controller.abort();
   }, [form.city]);

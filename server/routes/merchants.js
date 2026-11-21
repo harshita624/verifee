@@ -67,7 +67,16 @@ router.get("/me", protect, async (req, res, next) => {
     if (!profile) return res.json({ success: true, data: { profile: null, transactions: [], totals: { count: 0, gross: 0, refunds: 0 } } });
     const payments = await Payment.find({ "metadata.merchantProfileId": String(profile._id), provider: "paypal" }).sort({ createdAt: -1 }).limit(200).select("status amount amountInr currency paypalCaptureId capturedAt createdAt metadata refund").lean();
     const captured = payments.filter((p) => ["captured", "refunded"].includes(p.status));
-    const totals = captured.reduce((t, p) => { t.gross += p.amountInr || p.amount; if (p.status === "refunded") t.refunds += p.refund?.amount && p.refund?.currency === "INR" ? p.refund.amount : (p.amountInr || p.amount); return t; }, { count: captured.length, gross: 0, refunds: 0 });
+    const totals = captured.reduce((t, p) => {
+      const gross = p.amountInr || p.amount;
+      const refund = Number(p.refund?.amount) || 0;
+      t.gross += gross;
+      const refundInr = p.amountInr && p.amount
+        ? refund * (p.amountInr / p.amount)
+        : refund;
+      t.refunds += Math.min(gross, refundInr);
+      return t;
+    }, { count: captured.length, gross: 0, refunds: 0 });
     res.set("Cache-Control", "private, no-store");
     res.json({ success: true, data: { profile, transactions: payments, totals } });
   } catch (err) { next(err); }

@@ -6,6 +6,9 @@ const paymentSchema = new mongoose.Schema({
   provider: { type: String, enum: ["paypal", "upi"], required: true },
   kind: { type: String, enum: ["pro_plan", "fair_pay"], required: true },
   plan: { type: String, enum: ["monthly", "yearly"] },
+  planGrantStart: Date,
+  planGrantEnd: Date,
+  planEntitlementApplied: Boolean,
 
   // Why the user is paying. Fair Pay: chosen by the buyer. Pro: always "premium".
   purpose: {
@@ -50,6 +53,7 @@ const paymentSchema = new mongoose.Schema({
     amount: Number,
     currency: String,
   },
+  refundIds: { type: [String], default: [] },
 
   // Audit trail of PayPal webhook events (deduplicated by event id, newest 30 kept)
   events: {

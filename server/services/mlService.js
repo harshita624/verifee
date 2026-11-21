@@ -6,7 +6,12 @@
 const PriceReport = require("../models/PriceReport");
 const ScamReport  = require("../models/ScamReport");
 const { normalizeProductName, productNameRegex } = require("../utils/productName");
+const { escapeRegex } = require("../utils/regex");
 const { categoryFilter, detailsFilter, RISK_TOLERANCE, normalizeCategory } = require("../utils/category");
+
+const textFilter = (value) => value
+  ? { $regex: new RegExp(escapeRegex(String(value).trim()), "i") }
+  : undefined;
 
 const qualityFilter = (quality) => !quality ? {} : quality === "good"
   ? { $and: [{ $or: [{ quality }, { quality: { $exists: false } }] }] }
@@ -19,11 +24,11 @@ async function detectPriceAnomaly(product, city, offeredPrice, quality = "", cat
   const volatility = RISK_TOLERANCE[canonicalCategory] || 2.2;
   const reports = await PriceReport.find({
     product: { $regex: productNameRegex(product) },
-    ...(city && { city: { $regex: new RegExp(city, "i") } }),
+    ...(city && { city: textFilter(city) }),
     ...qualityFilter(quality),
     ...categoryFilter(canonicalCategory, product),
-    isVerified: true,
-  }).select("pricePaid").lean();
+    verificationStatus: "approved",
+  }).select("pricePaid").sort({ createdAt: -1 }).limit(5000).lean();
 
   if (reports.length < 3) {
     return { hasEnoughData: false, dataPoints: reports.length, anomaly: null };
@@ -129,10 +134,10 @@ function cosineSimilarity(vecA, vecB) {
 async function findSimilarReports(queryProduct, city, limit = 10, category = "", quality = "") {
   const canonicalCategory = normalizeCategory(category, queryProduct);
   const candidates = await PriceReport.find({
-    ...(city && { city: { $regex: new RegExp(city, "i") } }),
+    ...(city && { city: textFilter(city) }),
     ...categoryFilter(canonicalCategory, queryProduct),
     ...qualityFilter(quality),
-    isVerified: true,
+    verificationStatus: "approved",
   })
     .select("product pricePaid city marketName shopName createdAt")
     .sort({ createdAt: -1 })
@@ -157,19 +162,23 @@ async function findSimilarReports(queryProduct, city, limit = 10, category = "",
 
 // ── 3. Linear regression price trend ─────────────────────────────────────────
 
-async function computePriceTrend(product, city, quality = "", category = "", details = {}) {
+async function computePriceTrend(product, city, quality = "", category = "", details = {}, place = "") {
   const canonicalCategory = normalizeCategory(category, product);
   const reports = await PriceReport.find({
     product: { $regex: productNameRegex(product) },
-    ...(city && { city: { $regex: new RegExp(city, "i") } }),
+    ...(city && { city: textFilter(city) }),
+    ...(place && { marketName: textFilter(place) }),
     ...qualityFilter(quality),
     ...categoryFilter(canonicalCategory, product),
     ...detailsFilter(canonicalCategory, details),
-    isVerified: true,
+    verificationStatus: "approved",
   })
     .select("pricePaid createdAt")
-    .sort({ createdAt: 1 })
+    .sort({ createdAt: -1 })
+    .limit(5000)
     .lean();
+
+  reports.reverse(); // Keep the capped recent sample in chronological order.
 
   if (reports.length < 5) return { trend: "insufficient_data", slope: 0 };
 
@@ -202,12 +211,12 @@ async function computePriceTrend(product, city, quality = "", category = "", det
 // ── 4. Market trust score ─────────────────────────────────────────────────────
 
 async function computeMarketTrustScore(city, marketName) {
-  const filter = { city: { $regex: new RegExp(city, "i") } };
-  if (marketName) filter.marketName = { $regex: new RegExp(marketName, "i") };
+  const filter = { city: textFilter(city) };
+  if (marketName) filter.marketName = textFilter(marketName);
 
   const [priceReports, scamReports] = await Promise.all([
-    PriceReport.find(filter).select("pricePaid helpfulVotes isVerified").lean(),
-    ScamReport.find(filter).select("severity").lean(),
+    PriceReport.find({ ...filter, verificationStatus: "approved", isVerified: true }).select("pricePaid helpfulVotes isVerified verificationStatus").sort({ createdAt: -1 }).limit(1000).lean(),
+    ScamReport.find({ ...filter, verified: true }).select("severity").sort({ reportedAt: -1 }).limit(1000).lean(),
   ]);
 
   const reportCount   = priceReports.length;
@@ -235,18 +244,19 @@ async function computeMarketTrustScore(city, marketName) {
 
 // ── 5. Price distribution ─────────────────────────────────────────────────────
 
-async function getPriceDistribution(product, city, quality = "", category = "", details = {}) {
+async function getPriceDistribution(product, city, quality = "", category = "", details = {}, place = "") {
   const canonicalCategory = normalizeCategory(category, product);
   // Deliberately global across contributors: only verified reports are pooled,
   // with no submittedBy filter, so every user's verified price can contribute.
   const reports = await PriceReport.find({
     product:    { $regex: productNameRegex(product) },
-    ...(city && { city: { $regex: new RegExp(city, "i") } }),
+    ...(city && { city: textFilter(city) }),
+    ...(place && { marketName: textFilter(place) }),
     ...qualityFilter(quality),
     ...categoryFilter(canonicalCategory, product),
     ...detailsFilter(canonicalCategory, details),
-    isVerified: true,
-  }).select("pricePaid").lean();
+    verificationStatus: "approved",
+  }).select("pricePaid").sort({ createdAt: -1 }).limit(5000).lean();
 
   if (!reports.length) return null;
 

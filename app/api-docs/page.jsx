@@ -7,7 +7,7 @@ const BASE = `${API_BASE}/api/v1`;
 
 const PUBLIC_ENDPOINTS = [
   { m: "POST", path: "/ai/fair-price",        d: "Fair range, bargaining plan and confidence for a product in a city." },
-  { m: "POST", path: "/ai/scam-check",        d: "Scam probability and verdict for a quoted price." },
+  { m: "POST", path: "/ai/scam-check",        d: "Price risk indicator and verdict for a quoted price." },
   { m: "POST", path: "/ai/translate",         d: "Translate a shopping phrase into an Indian language." },
   { m: "POST", path: "/ai/chat",              d: "Conversational shopping assistant." },
   { m: "POST", path: "/ai/markets-search",    d: "Search markets by name or city." },

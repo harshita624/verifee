@@ -16,13 +16,14 @@ const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
 
 function ScamMeter({ probability }) {
   const color = probability>=70?"#dc2626":probability>=40?"#f59e0b":"#16a34a";
-  const label = probability>=70?"Scam":probability>=40?"Suspicious":"Fair";
+  const label = probability>=70?"High risk":probability>=40?"Review price":"Within range";
   const bg    = probability>=70?"#fef2f2":probability>=40?"#fffbeb":"#f0fdf4";
 
   return (
     <div className="rounded-2xl border-2 p-6 text-center" style={{ borderColor:color, background:bg }}>
-      <p className="text-[12px] font-semibold mb-2 uppercase tracking-wide" style={{ color }}>Scam Probability</p>
+      <p className="text-[12px] font-semibold mb-2 uppercase tracking-wide" style={{ color }}>Price Risk Indicator</p>
       <div className="text-[64px] font-black mb-2 leading-none" style={{ color }}>{probability}%</div>
+      <p className="mb-3 text-xs text-zinc-500">A comparison score, not a calibrated probability or proof of fraud.</p>
       <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[13px] font-bold text-white" style={{ background:color }}>
         {probability>=70
           ? <AlertTriangle className="w-3.5 h-3.5"/>
@@ -179,7 +180,7 @@ function ScamCheckContent() {
     const c = cityInput.trim();
     if (!c || c.length < 3) { setPlaces([]); return; }
     setLoadingPlaces(true);
-    fetch(`${API}/api/v1/ai/city-places/${encodeURIComponent(c)}`)
+    fetch(`${API}/api/v1/ai/city-places/${encodeURIComponent(c)}`, { credentials: "include" })
       .then(r => r.json())
       .then(d => { if (d.success) setPlaces(d.data||[]); })
       .catch(()=>{})
@@ -193,6 +194,7 @@ function ScamCheckContent() {
     try {
       const res  = await fetch(`${API}/api/v1/ai/scam-check`, {
         method:  "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify({
           product,
@@ -369,7 +371,7 @@ function ScamCheckContent() {
           <div className="bg-white rounded-2xl border border-zinc-100 p-12 text-center">
             <Loader2 className="w-10 h-10 text-red-500 animate-spin mx-auto mb-4" />
             <p className="text-[15px] font-semibold text-zinc-700">
-              Analyzing scam probability{selectedPlace?` at ${selectedPlace}`:""}...
+        Checking the price risk{selectedPlace?` at ${selectedPlace}`:""}...
             </p>
             <p className="text-[13px] text-zinc-400 mt-1">
               Comparing the quote with local prices

@@ -234,7 +234,7 @@ function CheckPriceContent() {
     let cancelled = false;
     setLoadingPlaces(true);
 
-    fetch(`${API}/api/v1/ai/city-places/${encodeURIComponent(c)}`)
+    fetch(`${API}/api/v1/ai/city-places/${encodeURIComponent(c)}`, { credentials: "include" })
       .then((r) => r.json())
       .then((d) => { if (!cancelled && d.success) setPlaces(d.data || []); })
       .catch(() => {})
@@ -268,6 +268,7 @@ function CheckPriceContent() {
     try {
       const res  = await fetch(`${API}/api/v1/ai/fair-price`, {
         method:  "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify({
           product:  productWithPlace,

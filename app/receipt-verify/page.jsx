@@ -34,12 +34,11 @@ export default function ReceiptVerifyPage() {
     reader.onloadend = async () => {
       try {
         const base64 = reader.result.split(",")[1];
-        const token  = localStorage.getItem("vf_token");
         const res    = await fetch(`${API}/api/v1/ai/verify-receipt`, {
           method:  "POST",
+          credentials: "include",
           headers: {
             "Content-Type": "application/json",
-            ...(token && { Authorization: `Bearer ${token}` }),
           },
           body: JSON.stringify({ imageBase64: base64, mimeType: file.type || "image/jpeg", city }),
         });

@@ -36,6 +36,7 @@ export default function StatusPage() {
     const started = performance.now();
     try {
       const res = await fetch(`${API_BASE}/health`, {
+        credentials: "include",
         cache: "no-store",
         signal: AbortSignal.timeout(25000),
       });

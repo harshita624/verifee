@@ -107,6 +107,7 @@ export default function MarketsPage() {
     try {
       const res = await fetch(`${API}/api/v1/ai/markets-search`, {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query: q, city, limit: 9 }),
         signal: controller.signal,

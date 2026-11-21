@@ -20,7 +20,7 @@ const FEATURES = [
   {
     icon: AlertTriangle,
     title: "Scam Detector",
-    desc: "Enter the offered price. Instant scam probability score and a negotiation script in your language.",
+    desc: "Compare an offered price with local references and get a risk indicator with a negotiation script in your language.",
     color: "#ef4444", bg: "#fef2f2",
     href: "/scam-check",
     cta: "Detect scams",

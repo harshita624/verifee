@@ -28,8 +28,10 @@ const priceReportSchema = new mongoose.Schema({
     confidence: Number,
   },
   submittedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+  verificationStatus: { type: String, enum: ["pending", "approved", "rejected"], default: "pending", index: true },
   isVerified: { type: Boolean, default: false },
   verifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+  moderationNote: { type: String, trim: true, maxlength: 300 },
   helpfulVotes: { type: Number, default: 0 },
   votedBy:{type:[{type:mongoose.Schema.Types.ObjectId,ref:"User"}],select:false},
   

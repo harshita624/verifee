@@ -14,6 +14,8 @@ module.exports = (err, req, res, next) => {
   if (err.name === "CastError") { status = 400; message = "Invalid ID"; }
 
   if (process.env.NODE_ENV === "development") console.error("[ERROR]", err);
+  if (process.env.NODE_ENV === "production" && status >= 500) message = "Internal server error";
+  if (err.code === "CORS_ORIGIN_DENIED") message = "Origin not allowed";
 
   res.status(status).json({
     success: false,

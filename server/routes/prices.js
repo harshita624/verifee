@@ -1,7 +1,7 @@
 const express = require("express");
 const multer = require("multer");
 const priceController = require("../controllers/priceController");
-const { protect } = require("../middleware/auth");
+const { protect, restrictTo } = require("../middleware/auth");
 
 const router = express.Router();
 const receiptUpload = multer({
@@ -21,6 +21,9 @@ const parseReceiptUpload = (req, res, next) => receiptUpload.single("receipt")(r
 });
 
 router.get("/receipt-asset/:id", priceController.downloadReceipt);
+router.get("/admin/pending", protect, restrictTo("admin"), priceController.getPendingReports);
+router.get("/admin/receipt-asset/:id", protect, restrictTo("admin"), priceController.downloadAdminReceipt);
+router.patch("/admin/:id/review", protect, restrictTo("admin"), priceController.reviewReport);
 router.get("/mine", protect, priceController.getMyReports);
 router.post("/receipt", protect, parseReceiptUpload, priceController.uploadReceipt);
 router.get("/", priceController.getReports);

@@ -66,7 +66,7 @@ function Leaderboard() {
   const { user } = useAuth();
 
   useEffect(() => {
-    fetch(`${API}/api/v1/auth/top-contributors?limit=5`)
+    fetch(`${API}/api/v1/auth/top-contributors?limit=5`, { credentials: "include" })
       .then((r) => r.json())
       .then((d) => {
         if (d.success) setLeaders(d.data || []);
@@ -200,10 +200,10 @@ export default function ContributePage() {
         reader.onerror = () => reject(new Error("Could not read the image file."));
         reader.readAsDataURL(file);
       });
-      const token = localStorage.getItem("vf_token");
       const response = await fetch(`${API}/api/v1/ai/parse-receipt`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...(token && { Authorization: `Bearer ${token}` }) },
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ imageBase64: String(dataUrl).split(",")[1], mimeType: file.type }),
       });
       const payload = await response.json();
@@ -250,8 +250,7 @@ export default function ContributePage() {
     setSaving(true);
     setError("");
     try {
-      const token = localStorage.getItem("vf_token");
-      if (!token) throw new Error("Please sign in before submitting a contribution.");
+      if (!user) throw new Error("Please sign in before submitting a contribution.");
       let receiptUrl;
       let receiptAssetId;
       if (receiptFile) {
@@ -259,7 +258,7 @@ export default function ContributePage() {
         uploadBody.append("receipt", receiptFile);
         const uploadResponse = await fetch(`${API}/api/v1/prices/receipt`, {
           method: "POST",
-          headers: { Authorization: `Bearer ${token}` },
+          credentials: "include",
           body: uploadBody,
         });
         const uploadData = await uploadResponse.json();
@@ -270,9 +269,9 @@ export default function ContributePage() {
       }
       const res   = await fetch(`${API}/api/v1/prices`, {
         method:  "POST",
+        credentials: "include",
         headers: {
           "Content-Type": "application/json",
-          ...(token && { Authorization: `Bearer ${token}` }),
         },
         body: JSON.stringify({
           product:    form.product.trim(),
@@ -691,10 +690,6 @@ export default function ContributePage() {
               <div className="space-y-2.5">
                 {[
                   { action: "Submit a price report",     xp: "+50 XP"  },
-                  { action: "Report gets verified",      xp: "+30 XP"  },
-                  { action: "Report gets 10 upvotes",    xp: "+20 XP"  },
-                  { action: "Upload a receipt photo",    xp: "+80 XP"  },
-                  { action: "Report a scam",             xp: "+40 XP"  },
                 ].map(({ action, xp }) => (
                   <div key={action} className="flex items-center justify-between">
                     <p className="text-[12px] text-zinc-600">{action}</p>
@@ -702,6 +697,7 @@ export default function ContributePage() {
                   </div>
                 ))}
               </div>
+              <p className="mt-3 text-[11px] leading-relaxed text-zinc-400">Every report is marked as shared while it waits for human review. A receipt helps reviewers check the details.</p>
             </div>
 
             {/* Real leaderboard */}

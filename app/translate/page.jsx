@@ -39,6 +39,7 @@ export default function TranslatePage() {
     try {
       const res = await fetch(`${API}/api/v1/ai/translate`, {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: t, targetLang }),
       });

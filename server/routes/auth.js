@@ -1,11 +1,12 @@
 const express = require("express");
 const authController = require("../controllers/authController");
-const { protect } = require("../middleware/auth");
+const { protect, optionalAuth } = require("../middleware/auth");
 
 const router = express.Router();
 
 router.post("/signup", authController.signup);
 router.post("/login", authController.login);
+router.post("/logout", optionalAuth, authController.logout);
 router.post("/google", authController.googleAuth);
 router.get("/me", protect, authController.getMe);
 router.patch("/me", protect, authController.updateProfile);

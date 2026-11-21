@@ -124,6 +124,7 @@ export default function BargainCoachPage() {
     try {
       const res = await fetch(`${API}/api/v1/ai/bargain-script`, {
         method:  "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify({
           product: product.trim(),
@@ -149,6 +150,7 @@ export default function BargainCoachPage() {
     try {
       const res = await fetch(`${API}/api/v1/ai/bargain-reply`, {
         method:  "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify({
           product,

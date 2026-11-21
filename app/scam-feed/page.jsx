@@ -8,6 +8,7 @@ import {
 import Link from "next/link";
 import { useLocation } from "@/hooks/useLocation";
 import { CATEGORIES } from "@/lib/utils";
+import { useAuth } from "@/hooks/useAuth";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
 
@@ -104,6 +105,7 @@ function ReportCard({ report, onUpvote }) {
 }
 
 export default function ScamFeedPage() {
+  const { user } = useAuth();
   const { city }         = useLocation();
   const [cityFilter,     setCityFilter]    = useState("");
   const [categoryFilter, setCategoryFilter]= useState("");
@@ -131,7 +133,7 @@ export default function ScamFeedPage() {
       const params = new URLSearchParams({ limit: 30 });
       if (cityFilter)     params.set("city",     cityFilter);
       if (categoryFilter) params.set("category", categoryFilter);
-      const res  = await fetch(`${API}/api/v1/scam-reports?${params}`);
+      const res  = await fetch(`${API}/api/v1/scam-reports?${params}`, { credentials: "include" });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message);
       setReports(data.data || []);
@@ -143,10 +145,9 @@ export default function ScamFeedPage() {
   };
 
   const upvote = async (id) => {
-    const token = localStorage.getItem("vf_token");
-    if (!token) { setError("Sign in to mark a report helpful."); return; }
+    if (!user) { setError("Sign in to mark a report helpful."); return; }
     try {
-      const res = await fetch(`${API}/api/v1/scam-reports/${id}/upvote`, { method: "PATCH", headers: { Authorization: `Bearer ${token}` } });
+      const res = await fetch(`${API}/api/v1/scam-reports/${id}/upvote`, { method: "PATCH", credentials: "include" });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || "Could not update this report.");
       setReports((items) => items.map((item) => item._id === id ? { ...item, upvotes: data.data.upvotes } : item));
@@ -157,12 +158,11 @@ export default function ScamFeedPage() {
     if (!form.product || !form.city || !form.chargedPrice) return;
     setSubmitting(true);
     try {
-      const token = localStorage.getItem("vf_token");
       const res   = await fetch(`${API}/api/v1/scam-reports`, {
         method:  "POST",
+        credentials: "include",
         headers: {
           "Content-Type": "application/json",
-          ...(token && { Authorization: `Bearer ${token}` }),
         },
         body: JSON.stringify({ ...form, chargedPrice: Number(form.chargedPrice), fairPrice: Number(form.fairPrice) }),
       });

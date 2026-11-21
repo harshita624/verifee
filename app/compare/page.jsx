@@ -100,6 +100,7 @@ export default function ComparePage() {
       const calls = selected.map(city =>
         fetch(`${API}/api/v1/ai/fair-price`, {
           method:  "POST",
+          credentials: "include",
           headers: { "Content-Type": "application/json" },
           body:    JSON.stringify({
             product: product.trim(),

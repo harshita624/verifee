@@ -15,7 +15,7 @@ export default function CommunityPage() {
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/v1/auth/top-contributors?limit=10`)
+    fetch(`${API_BASE}/api/v1/auth/top-contributors?limit=10`, { credentials: "include" })
       .then((r) => r.json())
       .then((d) => {
         if (d.success) setLeaders(d.data || []);
@@ -26,7 +26,7 @@ export default function CommunityPage() {
   }, []);
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/v1/prices?limit=10`)
+    fetch(`${API_BASE}/api/v1/prices?limit=10`, { credentials: "include" })
       .then((r) => r.json())
       .then((d) => { if (d.success) setContributions(d.data || []); })
       .catch(() => {})
@@ -109,9 +109,9 @@ export default function CommunityPage() {
         <Bullets
           items={[
             "Submit a price report: 50 XP.",
-            "Your report is verified automatically because the price is plausible: 30 XP more, so 80 XP in total.",
-            "Complete a Fair Pay payment with PayPal: it becomes a verified price report, worth 80 XP.",
-            "Report a scam while signed in: 40 XP, for up to 3 reports a day.",
+            "A price report earns 50 XP when submitted. It stays marked as shared until it has been reviewed and approved.",
+            "Fair Pay payments are not used as public price evidence because a payment to Verifee does not confirm a sale by the named seller.",
+            "Scam reports are shared as community reports and do not currently award XP.",
             "Every 1,000 XP raises your level. Reaching 1,000 XP earns the Top Contributor badge.",
           ]}
         />

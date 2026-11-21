@@ -31,12 +31,12 @@ export default function SignupPage() {
     try {
       const res = await fetch(`${API}/api/v1/auth/signup`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        headers: { "Content-Type": "application/json", "X-Auth-Transport": "cookie" },
         body: JSON.stringify(form),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || "Signup failed");
-      localStorage.setItem("vf_token", data.data.token);
       setLoggedIn(data.data.user);
       router.push(safeNext());
     } catch (err) {

@@ -2,22 +2,27 @@ const express     = require("express");
 const ScamReport  = require("../models/ScamReport");
 const { protect, optionalAuth } = require("../middleware/auth");
 const { normalizeCategory, categoryFilter } = require("../utils/category");
+const { escapeRegex } = require("../utils/regex");
 
 const router = express.Router();
 
 // GET /api/v1/scam-reports
 router.get("/", async (req, res, next) => {
   try {
-    const { city, category, limit = 30, page = 1 } = req.query;
+    const { city, category } = req.query;
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 30, 1), 100);
+    const requestedPage = Number.parseInt(req.query.page, 10);
+    const page = Number.isFinite(requestedPage) && requestedPage > 0 ? Math.min(requestedPage, 10_000) : 1;
     const filter = {};
-    if (city)     filter.city     = new RegExp(city, "i");
+    if (city) filter.city = new RegExp(escapeRegex(String(city).slice(0, 100)), "i");
     if (category) Object.assign(filter, categoryFilter(category));
 
     const [reports, total] = await Promise.all([
       ScamReport.find(filter)
         .sort({ reportedAt: -1 })
-        .limit(Number(limit))
-        .skip((Number(page) - 1) * Number(limit))
+        .limit(limit)
+        .skip((page - 1) * limit)
+        .select("-submittedBy -votedBy")
         .lean(),
       ScamReport.countDocuments(filter),
     ]);
@@ -31,22 +36,36 @@ router.post("/", optionalAuth, async (req, res, next) => {
   try {
     const { product, city, marketName, chargedPrice, fairPrice, description, category } = req.body;
 
-    if (!product || !city || !chargedPrice) {
+    if (typeof product !== "string" || !product.trim() || product.trim().length > 120 ||
+        typeof city !== "string" || !city.trim() || city.trim().length > 100) {
       return res.status(400).json({ success: false, message: "Product, city, and charged price are required" });
     }
+    const charged = Number(chargedPrice);
+    const fair = fairPrice === undefined || fairPrice === null || fairPrice === "" ? undefined : Number(fairPrice);
+    if (!Number.isFinite(charged) || charged <= 0 || charged > 10_000_000 ||
+        (fair !== undefined && (!Number.isFinite(fair) || fair <= 0 || fair > 10_000_000))) {
+      return res.status(400).json({ success: false, message: "Enter valid charged and fair prices." });
+    }
+    if (marketName !== undefined && (typeof marketName !== "string" || marketName.length > 120) ||
+        description !== undefined && (typeof description !== "string" || description.length > 600)) {
+      return res.status(400).json({ success: false, message: "Market name or description is too long or invalid." });
+    }
 
-    const reportedBy = req.user?.name || "Anonymous";
+    const reportedBy = req.user ? "Community member" : "Anonymous";
 
     const report = await ScamReport.create({
       product: product.trim(),
       city:    city.trim(),
-      marketName, chargedPrice: Number(chargedPrice),
-      fairPrice:  Number(fairPrice) || undefined,
+      marketName: marketName?.trim(), chargedPrice: charged,
+      fairPrice: fair,
       description, category: normalizeCategory(category, product), reportedBy,
       submittedBy: req.user?._id,
     });
 
-    res.status(201).json({ success: true, data: report });
+    const publicReport = report.toObject();
+    delete publicReport.submittedBy;
+    delete publicReport.votedBy;
+    res.status(201).json({ success: true, data: publicReport });
   } catch (err) { next(err); }
 });
 

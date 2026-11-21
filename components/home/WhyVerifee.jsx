@@ -11,7 +11,7 @@ const VS_ITEMS = [
   },
   {
     others: "Generic search results when you type 'Pashmina price'",
-    verifee: "Scam probability score for the exact price you were just quoted",
+    verifee: "Price-risk indicator for the exact quote, based on local references",
     highlight: false,
   },
   {

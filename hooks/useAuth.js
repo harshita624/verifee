@@ -28,19 +28,16 @@ export function useAuth() {
     listeners.push(handler);
 
     if (!globalUser) {
-      const token = typeof window !== "undefined" ? localStorage.getItem("vf_token") : null;
-      if (!token) {
-        setLoading(false);
-        return () => { listeners = listeners.filter((l) => l !== handler); };
-      }
+      // Remove the old browser-readable token during migration to HttpOnly sessions.
+      if (typeof window !== "undefined") localStorage.removeItem("vf_token");
 
       if (!authCheckPromise) {
         const version = authVersion;
         const authUrl = `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000"}/api/v1/auth/me`;
-        const request = fetch(authUrl, { headers: { Authorization: `Bearer ${token}` } })
+        const request = fetch(authUrl, { credentials: "include" })
           .then(async (response) => {
             const data = await response.json().catch(() => null);
-            if (version !== authVersion || localStorage.getItem("vf_token") !== token) return;
+            if (version !== authVersion) return;
             if (response.status === 401 || response.status === 403) {
               clearAuthSession();
             } else if (response.ok && data?.success) {
@@ -67,8 +64,13 @@ export function useAuth() {
   }, []);
 
   const logout = useCallback(() => {
-    clearAuthSession();
-    window.location.href = "/";
+    const api = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
+    fetch(`${api}/api/v1/auth/logout`, { method: "POST", credentials: "include" })
+      .catch(() => {})
+      .finally(() => {
+        clearAuthSession();
+        window.location.href = "/";
+      });
   }, []);
 
   const setLoggedIn = useCallback((userData) => {

@@ -3,34 +3,40 @@ const crypto = require("crypto");
 const User = require("../models/User");
 const { TRAVEL_FREQUENCY } = require("../models/User");
 const { sendPasswordResetEmail } = require("../services/emailService");
+const { COOKIE_NAME, cookieOptions } = require("../config/authCookie");
 
-const signToken = (id) =>
-  jwt.sign({ id }, process.env.JWT_SECRET, {
+const signToken = (user) =>
+  jwt.sign({ id: user._id, ver: user.authVersion || 0 }, process.env.JWT_SECRET, {
     expiresIn: process.env.JWT_EXPIRES_IN || "7d",
   });
 
 // FIX: previously returned a hand-built object with `id` while GET /me returns
 // `_id`, so the same user had two shapes (the leaderboard "You" highlight and
 // other `_id` comparisons failed right after login). Both now use toJSON().
-const sendToken = (user, statusCode, res) => {
+const sendToken = (user, statusCode, req, res) => {
+  const token = signToken(user);
+  const cookieSession = req.get("X-Auth-Transport") === "cookie";
+  if (cookieSession) res.cookie(COOKIE_NAME, token, cookieOptions());
   res.status(statusCode).json({
     success: true,
-    data: { token: signToken(user._id), user: user.toJSON() },
+    data: { ...(cookieSession ? {} : { token }), user: user.toJSON() },
   });
 };
 
 const frontendUrl = () =>
   (process.env.FRONTEND_URL || "http://localhost:3000").split(",")[0].trim().replace(/\/$/, "");
+const invalidPassword = (value) =>
+  typeof value !== "string" || Buffer.byteLength(value, "utf8") < 8 || Buffer.byteLength(value, "utf8") > 72;
 
 exports.signup = async (req, res, next) => {
   try {
     const { name, email, password, city } = req.body;
 
-    if (!name?.trim() || !email?.trim() || !password)
+    if (typeof name !== "string" || !name.trim() || typeof email !== "string" || !email.trim() || typeof password !== "string")
       return res.status(400).json({ success: false, message: "Name, email, and password are required" });
 
-    if (password.length < 8)
-      return res.status(400).json({ success: false, message: "Password must be at least 8 characters" });
+    if (invalidPassword(password))
+      return res.status(400).json({ success: false, message: "Password must be 8 to 72 UTF-8 bytes long" });
 
     if (await User.findOne({ email: email.toLowerCase().trim() }))
       return res.status(409).json({ success: false, message: "An account with this email already exists" });
@@ -42,7 +48,7 @@ exports.signup = async (req, res, next) => {
       city: city?.trim() || "",
     });
 
-    sendToken(user, 201, res);
+    sendToken(user, 201, req, res);
   } catch (err) {
     next(err);
   }
@@ -52,10 +58,12 @@ exports.login = async (req, res, next) => {
   try {
     const { email, password } = req.body;
 
-    if (!email || !password)
+    if (typeof email !== "string" || !email.trim() || typeof password !== "string" || !password)
       return res.status(400).json({ success: false, message: "Email and password are required" });
+    if (Buffer.byteLength(password, "utf8") > 72)
+      return res.status(401).json({ success: false, message: "Invalid email or password" });
 
-    const user = await User.findOne({ email: String(email).toLowerCase().trim() }).select("+password");
+    const user = await User.findOne({ email: String(email).toLowerCase().trim() }).select("+password +authVersion");
 
     if (!user || !user.password || !(await user.comparePassword(password)))
       return res.status(401).json({ success: false, message: "Invalid email or password" });
@@ -66,7 +74,7 @@ exports.login = async (req, res, next) => {
     user.lastActive = Date.now();
     await user.save({ validateBeforeSave: false });
 
-    sendToken(user, 200, res);
+    sendToken(user, 200, req, res);
   } catch (err) {
     next(err);
   }
@@ -91,13 +99,27 @@ exports.googleAuth = async (req, res, next) => {
 
     const info = await r.json();
     const verified = info.email_verified === true || info.email_verified === "true";
-    if (info.aud !== process.env.GOOGLE_CLIENT_ID || !verified || !info.email)
+    if (info.aud !== process.env.GOOGLE_CLIENT_ID || !verified || !info.email || typeof info.sub !== "string" || !info.sub)
       return res.status(401).json({ success: false, message: "Google account could not be verified" });
 
     const googleId = info.sub;
     const email = String(info.email).toLowerCase();
 
-    let user = await User.findOne({ $or: [{ googleId }, { email }] });
+    // Resolve Google identity first. Never auto-link a Google identity to a
+    // password account by email: local accounts are not email-verified, so a
+    // pre-registered address could otherwise become an account takeover.
+    let user = await User.findOne({ googleId }).select("+authVersion");
+
+    if (!user) {
+      const emailUser = await User.findOne({ email }).select("+password +authVersion");
+      if (emailUser?.password) {
+        return res.status(409).json({
+          success: false,
+          message: "An account already uses this email. Sign in with your password instead.",
+        });
+      }
+      user = emailUser;
+    }
 
     if (!user) {
       user = await User.create({
@@ -108,13 +130,18 @@ exports.googleAuth = async (req, res, next) => {
         isVerified: true,
       });
     } else {
+      if (user.isActive === false)
+        return res.status(403).json({ success: false, message: "This account has been disabled" });
+      if (user.googleId && user.googleId !== googleId)
+        return res.status(409).json({ success: false, message: "This email is already linked to another Google account." });
       let dirty = false;
       if (!user.googleId) { user.googleId = googleId; dirty = true; }
+      if (!user.isVerified) { user.isVerified = true; dirty = true; }
       if (info.picture && !user.avatar) { user.avatar = info.picture; dirty = true; }
       if (dirty) await user.save({ validateBeforeSave: false });
     }
 
-    sendToken(user, 200, res);
+    sendToken(user, 200, req, res);
   } catch (err) {
     next(err);
   }
@@ -201,25 +228,36 @@ exports.forgotPassword = async (req, res, next) => {
 
 exports.resetPassword = async (req, res, next) => {
   try {
-    if (!req.body.password || req.body.password.length < 8)
-      return res.status(400).json({ success: false, message: "Password must be at least 8 characters" });
+    if (invalidPassword(req.body.password))
+      return res.status(400).json({ success: false, message: "Password must be 8 to 72 UTF-8 bytes long" });
 
     const hashed = crypto.createHash("sha256").update(req.params.token).digest("hex");
 
     const user = await User.findOne({
       passwordResetToken: hashed,
       passwordResetExpires: { $gt: Date.now() },
-    });
+    }).select("+authVersion");
 
     if (!user)
       return res.status(400).json({ success: false, message: "Invalid or expired reset link" });
 
     user.password = req.body.password;
+    user.authVersion = (user.authVersion || 0) + 1;
     user.passwordResetToken = undefined;
     user.passwordResetExpires = undefined;
     await user.save();
 
-    sendToken(user, 200, res);
+    sendToken(user, 200, req, res);
+  } catch (err) {
+    next(err);
+  }
+};
+
+exports.logout = async (req, res, next) => {
+  try {
+    if (req.user) await User.updateOne({ _id: req.user._id }, { $inc: { authVersion: 1 } });
+    res.clearCookie(COOKIE_NAME, { ...cookieOptions(), maxAge: undefined });
+    res.json({ success: true });
   } catch (err) {
     next(err);
   }
@@ -231,14 +269,14 @@ exports.changePassword = async (req, res, next) => {
   try {
     const { currentPassword, newPassword } = req.body;
 
-    if (!currentPassword || !newPassword)
+    if (typeof currentPassword !== "string" || typeof newPassword !== "string" || !currentPassword || !newPassword)
       return res.status(400).json({ success: false, message: "Current password and new password are required" });
-    if (newPassword.length < 8)
-      return res.status(400).json({ success: false, message: "New password must be at least 8 characters" });
+    if (invalidPassword(newPassword))
+      return res.status(400).json({ success: false, message: "New password must be 8 to 72 UTF-8 bytes long" });
     if (currentPassword === newPassword)
       return res.status(400).json({ success: false, message: "New password must be different from current password" });
 
-    const user = await User.findById(req.user._id).select("+password");
+    const user = await User.findById(req.user._id).select("+password +authVersion");
     if (!user) return res.status(404).json({ success: false, message: "User not found" });
     if (!user.password)
       return res.status(400).json({ success: false, message: "Your account uses Google sign-in. Password cannot be changed here." });
@@ -247,9 +285,10 @@ exports.changePassword = async (req, res, next) => {
       return res.status(401).json({ success: false, message: "Current password is incorrect" });
 
     user.password = newPassword;
+    user.authVersion = (user.authVersion || 0) + 1;
     await user.save();
 
-    res.json({ success: true, message: "Password updated successfully" });
+    sendToken(user, 200, req, res);
   } catch (err) {
     next(err);
   }

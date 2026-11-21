@@ -8,7 +8,7 @@ Built for the *Build What's Next with PayPal and AI* hackathon.
 
 | Feature | PayPal | AI |
 |---|---|---|
-| **Fair Pay** (`/pay`) | Creates and captures a PayPal Orders v2 payment; when an enrolled, verified seller is selected and marketplace credentials are enabled, routes the order to that seller. Captures are verified against PayPal and receipted. | **AI Pay Guard** compares the quote with verified community reports or an AI estimate, supports quality tiers, and returns a signed token bound to the amount. |
+| **Fair Pay** (`/pay`) | Creates and captures a PayPal Orders v2 payment; when an enrolled, verified seller is selected and marketplace credentials are enabled, routes the order to that seller. Captures are verified against PayPal and receipted. | **AI Pay Guard** compares the quote with admin-approved community reports or an AI estimate, supports quality tiers, and returns a signed token bound to the amount. |
 | **Receipt Verifier** (`/receipt-verify`) | n/a | A vision-capable model extracts visible receipt fields and compares readable item prices with the shared local price engine. |
 | **Data quality** | Buyer payment records and receipts retain PayPal capture ID, time, recipient, and price reference. | A payment to Verifee is not proof of a sale by the named vendor, so it is not marked as a verified market-price report. |
 | **Verifee Pro** (`/pricing`) | Monthly / yearly plan via PayPal. A webhook reconciles completed and refunded payments. | Free users get 3 premium AI actions per day; Pro is unlimited. |
@@ -25,13 +25,14 @@ server/  Express + MongoDB (Mongoose)            → deploy on Render
          ├─ routes/merchants.js         Merchant claims, seller onboarding, payment directory/dashboard
          ├─ routes/travel.js            Route lookup, nearby places, currency rates, trip budgets/alerts
          ├─ controllers/paymentController.js   Pay Guard, PayPal, UPI, receipts, history, admin review
-         ├─ middleware/planGate.js      free-tier quota for premium AI routes
+         ├─ middleware/planGate.js      MongoDB-backed free-tier quota for premium AI routes
+         ├─ services/mongoRateLimitStore.js     shared API rate limits across server instances
          ├─ services/{aiService,mlService,ragService,nlpService}.js   AI + ML pipeline
 ```
 
 ## 1. Prerequisites
 
-- Node.js **18 or newer** (the server uses the built-in `fetch`)
+- Node.js **22.15 or newer** (use a maintained LTS release; Next.js 16 requires Node.js 20.9 or newer)
 - A MongoDB database (free MongoDB Atlas cluster is fine)
 - A PayPal developer account (free)
 - An AI key (Groq free tier is the default)
@@ -55,12 +56,12 @@ server/  Express + MongoDB (Mongoose)            → deploy on Render
 ```bash
 # 1. Server
 cd server
-npm install
+npm ci
 cp .env.example .env        # then fill in the values from the table above
 npm run dev                 # or: node index.js         → http://localhost:5000
 
 # 2. Next.js frontend (new terminal, from the repository root)
-npm install
+npm ci
 cp .env.local.example .env.local
 npm run dev                 # → http://localhost:3000
 ```
@@ -78,7 +79,10 @@ Check the API: open <http://localhost:5000/health>. It should show `"paypal": tr
 ## 5. Deploy
 
 - **Server (Render):** set every variable from `server/.env.example` in the Render dashboard. Set `FRONTEND_URL` to your Vercel URL and `NODE_ENV=production`.
-- **Client (Vercel):** set `NEXT_PUBLIC_API_URL` to your Render URL.
+- Set `JWT_SECRET` to a unique random secret of at least 32 bytes; the API refuses to start in production with a missing, short, or example secret.
+- **Client (Vercel):** set `NEXT_PUBLIC_API_URL` to your Vercel site origin and `API_REWRITE_URL` to your Render API origin. This keeps browser API calls on the site origin so HttpOnly login cookies work without third-party cookies.
+- Browser sign-in uses a `Secure` (in production), `HttpOnly`, `SameSite=Lax` session cookie. After deploying this change, users must sign in again. External API clients can continue to use the bearer-token response.
+- Signing out, changing a password, or resetting a password invalidates previously issued sessions for that account, including sessions on other devices.
 - For real money: create a **Live** PayPal app, set `PAYPAL_ENV=live` with the live credentials (PayPal must approve your business account first).
 
 ## 6. API (payments)
@@ -102,6 +106,11 @@ Check the API: open <http://localhost:5000/health>. It should show `"paypal": tr
 | GET/POST | `/api/v1/merchants/me` | user | Merchant claim and private seller dashboard |
 | POST | `/api/v1/merchants/paypal/onboard`, `/paypal/complete` | user | PayPal seller connection, requires approved partner setup |
 | GET | `/api/v1/merchants/directory` | public | Verified sellers that can receive PayPal payments |
+| GET | `/api/v1/prices/admin/pending` | admin | Review pending and legacy price reports |
+| GET | `/api/v1/prices/admin/receipt-asset/:id` | admin | View an uploaded MongoDB receipt during review |
+| PATCH | `/api/v1/prices/admin/:id/review` | admin | Approve or reject a price report; approval requires an uploaded receipt |
+
+Price contributions start as **pending**. Plausible-looking prices are no longer automatically called verified: only an admin-reviewed report with receipt evidence contributes to community price statistics and risk checks. Older reports created by the previous automatic-screening behavior remain unapproved until reviewed. Set a user's MongoDB `role` to `"admin"` to access the moderation endpoints; send `Authorization: Bearer <token>`.
 
 ## 6a. Travel and merchant features
 
@@ -142,6 +151,7 @@ Only an explicit cancel can record a reason. A buyer who simply closes the tab n
 - Route distances use OpenStreetMap geocoding and OSRM driving routes. Fare bands are transparent Verifee heuristics, and public-transport fares are not live transit quotes. Nearby POIs come from community-maintained OpenStreetMap and are not automatically verified; nearby search caches results and falls back from Overpass to bounded Nominatim search when Overpass is unavailable.
 - Exchange rates are reference rates, not guaranteed card/bank rates. Travel price alerts are checked when the user opens the trip or manually refreshes; push/email notifications are not configured.
 - The camera scanner needs HTTPS (or `localhost`); a screenshot upload fallback is included.
+- Scam detection returns a heuristic price-risk indicator, not a calibrated fraud probability or a finding that a seller committed fraud.
 - The Receipt Verifier uses the configured vision-capable provider (`groq`, `openai`, or `gemini`). If the provider/key/model is missing or the receipt is unreadable, it returns a clear error instead of an empty success.
 
 ## License
